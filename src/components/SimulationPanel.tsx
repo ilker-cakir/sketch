@@ -1,5 +1,5 @@
 import { Play } from 'lucide-react';
-import { useSelector } from '@xstate/store/react';
+import { useSelector } from '@xstate/store-react';
 import { appStore, computeSimSnapshot } from '@/lib/store';
 import { useEffect, useMemo, useRef } from 'react';
 

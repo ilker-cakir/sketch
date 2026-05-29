@@ -127,7 +127,9 @@ export function AppLayout() {
     }
   }, []);
 
-  // Scroll to first active leaf node when a sim event comes in
+  // Scroll to first active leaf node when the active sim state changes
+  // (on startSim, restartSim, and simSend the store produces a new
+  // simActiveIds set, so a reference change signals a sim transition).
   useEffect(() => {
     const scrollToActive = () => {
       const container = vizScrollRef.current;
@@ -137,12 +139,16 @@ export function AppLayout() {
         el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     };
-    const subs = [
-      appStore.on('simSend', scrollToActive),
-      appStore.on('startSim', scrollToActive),
-      appStore.on('restartSim', scrollToActive),
-    ];
-    return () => subs.forEach((sub) => sub.unsubscribe());
+    let prevActiveIds = appStore.getSnapshot().context.simActiveIds;
+    const sub = appStore.subscribe((snapshot) => {
+      const { simActiveIds } = snapshot.context;
+      if (simActiveIds !== prevActiveIds) {
+        prevActiveIds = simActiveIds;
+        // Defer until after the viz re-renders with the new active node.
+        requestAnimationFrame(scrollToActive);
+      }
+    });
+    return () => sub.unsubscribe();
   }, []);
 
   const handleCodeChange = useCallback((newCode: string) => {
@@ -575,9 +581,7 @@ export function AppLayout() {
                           ? 'JSON'
                           : example.format === 'yaml'
                             ? 'YAML'
-                            : example.format === 'mermaid'
-                              ? 'Mermaid'
-                              : 'Sketch'}
+                            : 'Mermaid'}
                     </span>
                   </div>
                   <span className="text-[0.6875rem] text-muted-foreground">

@@ -6,7 +6,6 @@ import {
   fromMermaidState,
   fromMermaidFlowchart,
 } from '@statelyai/graph/mermaid';
-import { parseSketchDSL } from './sketch-parser';
 import YAML from 'yaml';
 
 // Types for node/edge data used in our graph
@@ -454,25 +453,8 @@ export function detectFormat(code: string): CodeFormat | null {
   const hasArrows = lines.some((l) => /->/.test(l));
   if (hasColonKeys && !hasArrows) return 'yaml';
 
-  // Default: sketch DSL
+  // Unknown / unrecognized format
   return null;
-}
-
-/**
- * Parse sketch systems DSL into XState machines.
- */
-export function parseSketchCode(code: string): {
-  machines: AnyStateMachine[];
-  error: string | null;
-} {
-  const { config, error } = parseSketchDSL(code);
-  if (error) return { machines: [], error };
-  try {
-    const machine = xstate.createMachine(config as any);
-    return { machines: [machine], error: null };
-  } catch (e) {
-    return { machines: [], error: String(e) };
-  }
 }
 
 /**
@@ -761,25 +743,9 @@ export function parseCode(code: string, format?: CodeFormat | null): {
     case 'mermaid':
       return parseMermaidCode(code);
     default:
-      return parseSketchCode(code);
+      return { machines: [], error: 'Unrecognized code format' };
   }
 }
-
-export const defaultSketchCode = `Fetch App*
-  idle*
-    FETCH -> loading
-  loading
-    success -> processing
-    error -> failed
-    CANCEL -> idle
-  processing
-    done -> success
-    fail -> failed
-  success
-    FETCH -> loading
-  failed
-    RETRY -> loading
-`;
 
 export function getDefaultMachine(): AnyStateMachine {
   const result = parseXStateMachineCode(defaultMachineCode);

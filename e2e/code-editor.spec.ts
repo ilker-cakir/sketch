@@ -128,20 +128,4 @@ states:
     await expect(page.getByTestId('format-badge')).toHaveText('YAML');
     await expect(page.getByTestId('machine-name')).toHaveText('yamlTest');
   });
-
-  test('detects Sketch DSL format', async ({ page }) => {
-    await setEditorContent(
-      page,
-      `MyMachine*
-  idle*
-    NEXT -> active
-  active
-    BACK -> idle`,
-    );
-
-    await page.getByTestId('update-button').click();
-
-    await expect(page.getByTestId('format-badge')).toHaveText('Sketch');
-    await expect(page.getByTestId('machine-name')).toHaveText('MyMachine');
-  });
 });
