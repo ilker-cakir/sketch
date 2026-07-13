@@ -9,9 +9,15 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as InspectRouteImport } from './routes/inspect'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as VizSourceFileIdRouteImport } from './routes/viz/$sourceFileId'
 
+const InspectRoute = InspectRouteImport.update({
+  id: '/inspect',
+  path: '/inspect',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -25,32 +31,43 @@ const VizSourceFileIdRoute = VizSourceFileIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/inspect': typeof InspectRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/inspect': typeof InspectRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/inspect': typeof InspectRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/viz/$sourceFileId'
+  fullPaths: '/' | '/inspect' | '/viz/$sourceFileId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/viz/$sourceFileId'
-  id: '__root__' | '/' | '/viz/$sourceFileId'
+  to: '/' | '/inspect' | '/viz/$sourceFileId'
+  id: '__root__' | '/' | '/inspect' | '/viz/$sourceFileId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  InspectRoute: typeof InspectRoute
   VizSourceFileIdRoute: typeof VizSourceFileIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/inspect': {
+      id: '/inspect'
+      path: '/inspect'
+      fullPath: '/inspect'
+      preLoaderRoute: typeof InspectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -70,6 +87,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  InspectRoute: InspectRoute,
   VizSourceFileIdRoute: VizSourceFileIdRoute,
 }
 export const routeTree = rootRouteImport

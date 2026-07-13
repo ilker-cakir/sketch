@@ -23,6 +23,17 @@ pnpm dev
 
 Open [`http://localhost:3000`](http://localhost:3000)
 
+## Try Inspector Locally
+
+<!-- local inspect example command from examples/inspect/package.json -->
+
+```bash
+cd examples/inspect
+npm start
+```
+
+This starts Sketch at [`http://127.0.0.1:3000/inspect`](http://127.0.0.1:3000/inspect), opens the example app, and streams `@statelyai/inspect` events to Sketch.
+
 ## Run Checks
 
 ```bash

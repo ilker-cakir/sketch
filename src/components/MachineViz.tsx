@@ -6,9 +6,10 @@ import type { StateNodeData, TransitionData, MachineGraph } from '@/lib/machine'
 
 interface MachineVizProps {
   graph: MachineGraph;
+  activeIds?: Set<string>;
 }
 
-export function MachineViz({ graph }: MachineVizProps) {
+export function MachineViz({ graph, activeIds }: MachineVizProps) {
   const roots = getRoots(graph) as GraphNode<StateNodeData>[];
   if (roots.length === 0) return null;
 
@@ -61,6 +62,7 @@ export function MachineViz({ graph }: MachineVizProps) {
             node={child}
             graph={graph}
             isInitial={root.data.initialId === child.id}
+            activeIds={activeIds}
           />
         ))}
       </div>

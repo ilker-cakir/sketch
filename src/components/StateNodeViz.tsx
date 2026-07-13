@@ -27,9 +27,10 @@ interface StateNodeVizProps {
   graph: MachineGraph;
   isInitial?: boolean;
   isRegion?: boolean;
+  activeIds?: Set<string>;
 }
 
-export function StateNodeViz({ node, graph, isInitial, isRegion }: StateNodeVizProps) {
+export function StateNodeViz({ node, graph, isInitial, isRegion, activeIds }: StateNodeVizProps) {
   const children = getChildren(graph, node.id) as GraphNode<StateNodeData>[];
   const outEdges = getOutEdges(graph, node.id) as GraphEdge<TransitionData>[];
   const { data } = node;
@@ -39,6 +40,7 @@ export function StateNodeViz({ node, graph, isInitial, isRegion }: StateNodeVizP
   const isSimActive = useSelector(appStore, (s) =>
     s.context.simActiveIds.has(node.id),
   );
+  const isActive = activeIds ? activeIds.has(node.id) : isSimActive;
 
   const isAtomic = data.type === 'atomic' || data.type === null;
   const isFinal = data.type === 'final';
@@ -71,14 +73,14 @@ export function StateNodeViz({ node, graph, isInitial, isRegion }: StateNodeVizP
       {/* Node card */}
       <div
         data-testid="state-card"
-        data-sim-active={isSimActive && (isAtomic || isFinal) ? '' : undefined}
+        data-sim-active={isActive && (isAtomic || isFinal) ? '' : undefined}
         className={cn(
           'flex flex-col rounded-md border-2 border-border bg-card shadow-sm transition-[border-color,box-shadow,background-color] duration-150',
           isFinal && 'border-double border-[3px]',
           isRegion && 'border-dashed',
           isHighlighted &&
             'border-primary shadow-[0_0_0_1px_var(--color-primary)]',
-          isSimActive && (isAtomic || isFinal) && 'border-primary bg-primary/10',
+          isActive && (isAtomic || isFinal) && 'border-primary bg-primary/10',
         )}
       >
         {/* Header */}
@@ -188,6 +190,7 @@ export function StateNodeViz({ node, graph, isInitial, isRegion }: StateNodeVizP
                 graph={graph}
                 isInitial={data.initialId === child.id}
                 isRegion={isParallel}
+                activeIds={activeIds}
               />
             ))}
           </div>
