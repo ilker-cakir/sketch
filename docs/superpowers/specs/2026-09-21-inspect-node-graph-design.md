@@ -214,7 +214,7 @@ inventing its own:
 | Active ancestor | Primary border at reduced opacity — it is only on the path |
 | Entry / exit | Two clipped columns with a divider |
 | Transition label | Bordered pill with a category glyph, event name, and guard in primary |
-| Self / targetless | Arrowed loop above the node's top-right corner |
+| Self / targetless | One open arc per node, clear of the border, labelled with its events |
 | Background | Faint dot grid, so panning empty space still reads as movement |
 
 Hovering a node draws its outgoing transitions at full strength and fades the

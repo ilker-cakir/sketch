@@ -386,3 +386,57 @@ describe('measureEdgeLabel', () => {
     expect(label.width).toBeGreaterThanOrEqual(EDGE_ICON_WIDTH);
   });
 });
+
+describe('self and targetless transitions', () => {
+  const sceneWith = (edges: LayoutEdge[]) =>
+    buildScene(
+      {
+        width: 100, height: 100, droppedEdgeCount: 0,
+        nodes: [node('idle', { x: 0, y: 0, width: 140, height: 28 })],
+        edges,
+      },
+      fakeMeasure,
+    );
+
+  it('collapses several self transitions into one labelled loop', () => {
+    // Drawn per-edge they would all land on the same spot and overdraw into
+    // a single unreadable ring.
+    const scene = sceneWith([
+      edge('e1', 'idle', 'idle', { displayEvent: 'RETRY' }),
+      edge('e2', 'idle', 'idle', { displayEvent: 'POKE' }),
+    ]);
+    expect(scene.selfLoopLabels.size).toBe(1);
+    expect(scene.selfLoopLabels.get('idle')).toBe('RETRY, POKE');
+  });
+
+  it('includes the guard so two transitions on one event stay distinct', () => {
+    const scene = sceneWith([
+      edge('e1', 'idle', 'idle', { displayEvent: 'RETRY', guard: 'canRetry' }),
+      edge('e2', 'idle', 'idle', { displayEvent: 'RETRY', guard: 'isFatal' }),
+    ]);
+    expect(scene.selfLoopLabels.get('idle')).toBe('RETRY [canRetry], RETRY [isFatal]');
+  });
+
+  it('deduplicates identical entries', () => {
+    const scene = sceneWith([
+      edge('e1', 'idle', 'idle', { displayEvent: 'RETRY' }),
+      edge('e2', 'idle', 'idle', { displayEvent: 'RETRY' }),
+    ]);
+    expect(scene.selfLoopLabels.get('idle')).toBe('RETRY');
+  });
+
+  it('records no loop for a node without self transitions', () => {
+    const scene = buildScene(
+      {
+        width: 100, height: 100, droppedEdgeCount: 0,
+        nodes: [
+          node('a', { x: 0, y: 0, width: 140, height: 28 }),
+          node('b', { x: 200, y: 0, width: 140, height: 28 }),
+        ],
+        edges: [edge('e1', 'a', 'b')],
+      },
+      fakeMeasure,
+    );
+    expect(scene.selfLoopLabels.size).toBe(0);
+  });
+});

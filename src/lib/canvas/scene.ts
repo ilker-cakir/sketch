@@ -2,6 +2,7 @@ import type { LayoutEdge, LayoutGraph, LayoutNode, Point, Rect } from '@/lib/lay
 import {
   FONT_BODY,
   FONT_HEADER,
+  FONT_LABEL,
   NODE_PAD_X,
   GLYPH_WIDTH,
   nodeRows,
@@ -35,6 +36,14 @@ export interface Scene {
   cellSize: number;
   /** Outgoing edge ids per node, for emphasising a hovered node's transitions. */
   outEdgeIds: Map<string, string[]>;
+  /**
+   * Node id → the events of its self and targetless transitions, as one label.
+   *
+   * These carry no routed geometry, so they are drawn as a single loop glyph
+   * per node. Collapsing them here means several such transitions cannot
+   * overdraw each other into an unreadable circle.
+   */
+  selfLoopLabels: Map<string, string>;
 }
 
 const CELL_SIZE = 256;
@@ -127,6 +136,24 @@ export function buildScene(
     };
   });
 
+  const selfLoopLabels = new Map<string, string>();
+  for (const [sourceId, edges] of outEdges) {
+    const selfEdges = edges.filter((e) => e.isSelf);
+    if (selfEdges.length === 0) continue;
+    const events = [
+      ...new Set(
+        selfEdges.map((e) => {
+          const name = e.data.displayEvent || (e.data.isTargetless ? '' : 'self');
+          return e.data.guard ? `${name} [${e.data.guard}]` : name;
+        }),
+      ),
+    ].filter(Boolean);
+    selfLoopLabels.set(
+      sourceId,
+      truncateToWidth(events.join(', '), FONT_LABEL, 220, measureText),
+    );
+  }
+
   const edgeGrid = new Map<string, number[]>();
   layout.edges.forEach((edge, index) => {
     for (let i = 1; i < edge.points.length; i++) {
@@ -144,6 +171,7 @@ export function buildScene(
     edgeGrid,
     cellSize: CELL_SIZE,
     outEdgeIds,
+    selfLoopLabels,
   };
 }
 

@@ -518,38 +518,71 @@ function drawEdgeLabel(
   }
 }
 
-/** A loop with an arrowhead, for self and targetless transitions. */
+/**
+ * One labelled loop per node, for its self and targetless transitions.
+ *
+ * The arc deliberately stops short of a full turn: a 2π sweep closes the
+ * circle and buries the arrowhead under its own start point, which reads as a
+ * stray ring rather than a transition.
+ */
+const LOOP_START = Math.PI * 0.3;
+/** Equivalent to 0.7π, reached anticlockwise, leaving a 0.4π gap at the base. */
+const LOOP_END = Math.PI * -1.3;
+
 function drawSelfLoop(
   ctx: CanvasRenderingContext2D,
   theme: CanvasTheme,
   node: SceneNode,
+  label: string,
   active: boolean,
   scale: number,
 ): void {
-  // Sits clear of the top edge, so it reads as a transition leaving and
-  // re-entering the node rather than as an artefact on the border.
-  const r = 6.5;
-  const x = node.x + node.width - 16;
-  const y = node.y - r + 1;
+  // The whole loop clears the node's top edge, so the gap in the arc and the
+  // arrowhead are both visible instead of being hidden behind the border.
+  const r = 7;
+  const cx = node.x + node.width - 18;
+  const cy = node.y - r - 4;
+
+  const at = (angle: number): Point => ({
+    x: cx + r * Math.cos(angle),
+    y: cy + r * Math.sin(angle),
+  });
 
   ctx.strokeStyle = active ? theme.primary : theme.mutedForeground;
   ctx.fillStyle = ctx.strokeStyle;
-  ctx.globalAlpha = active ? 0.9 : 0.45;
+  ctx.globalAlpha = active ? 0.95 : 0.5;
   ctx.lineWidth = 1.4 / scale;
+
   ctx.beginPath();
-  ctx.arc(x, y, r, Math.PI * 0.55, Math.PI * 2.55);
+  ctx.arc(cx, cy, r, LOOP_START, LOOP_END, true);
   ctx.stroke();
 
   if (scale >= LOD_LABELS) {
-    const end = Math.PI * 2.55;
-    const tip = { x: x + r * Math.cos(end), y: y + r * Math.sin(end) };
-    const prev = {
-      x: x + r * Math.cos(end - 0.35),
-      y: y + r * Math.sin(end - 0.35),
-    };
-    drawArrowhead(ctx, prev, tip, scale);
+    drawArrowhead(ctx, at(LOOP_END + 0.25), at(LOOP_END), scale);
   }
   ctx.globalAlpha = 1;
+
+  // Name the events, so the glyph says which transitions it stands for.
+  if (scale < LOD_DETAIL || !label) return;
+
+  ctx.font = FONT_LABEL;
+  const textWidth = ctx.measureText(label).width;
+  const boxWidth = textWidth + EDGE_LABEL_PAD_X * 2;
+  const boxX = cx - boxWidth / 2;
+  const boxY = cy - r - 21;
+
+  ctx.globalAlpha = 0.96;
+  ctx.fillStyle = theme.card;
+  roundedRect(ctx, boxX, boxY, boxWidth, 18, 4);
+  ctx.fill();
+  ctx.globalAlpha = active ? 0.8 : 0.7;
+  ctx.strokeStyle = active ? theme.primary : theme.border;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = active ? theme.primary : theme.mutedForeground;
+  ctx.fillText(label, boxX + EDGE_LABEL_PAD_X, boxY + 9);
 }
 
 export interface DrawOptions {
@@ -645,11 +678,10 @@ export function draw(options: DrawOptions): DrawStats {
     stats.nodes++;
   }
 
-  for (const edge of scene.edges) {
-    if (!edge.isSelf) continue;
-    const node = scene.nodeById.get(edge.sourceId);
+  for (const [nodeId, label] of scene.selfLoopLabels) {
+    const node = scene.nodeById.get(nodeId);
     if (!node || !rectsIntersect(viewport, node)) continue;
-    drawSelfLoop(ctx, theme, node, state.activeIds.has(node.id), scale);
+    drawSelfLoop(ctx, theme, node, label, state.activeIds.has(nodeId), scale);
   }
 
   if (scale >= LOD_DETAIL) {
