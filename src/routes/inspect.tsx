@@ -12,8 +12,10 @@ import {
   ArrowDownWideNarrow,
   Boxes,
   ListOrdered,
+  Workflow,
 } from 'lucide-react';
 import { MachineViz } from '@/components/MachineViz';
+import { GraphPanel } from '@/components/GraphPanel';
 import { machineToGraph, type MachineGraph } from '@/lib/machine';
 import { cn } from '@/lib/utils';
 
@@ -35,18 +37,37 @@ type InspectState = {
   events: StatelyInspectionEvent[];
   selectedSessionId?: string;
   panel: 'actors' | 'sequence' | 'events';
+  mainView: 'dom' | 'graph';
 };
 
 type InspectAction =
   | StatelyInspectionEvent
   | { type: 'actor.select'; sessionId: string }
-  | { type: 'panel.select'; panel: InspectState['panel'] };
+  | { type: 'panel.select'; panel: InspectState['panel'] }
+  | { type: 'view.select'; view: InspectState['mainView'] };
 
 const initialInspectState: InspectState = {
   actors: {},
   events: [],
   panel: 'events',
+  mainView: 'dom',
 };
+
+/**
+ * Inspection events arrive at keystroke rate, so the log is bounded: an
+ * unbounded array grows without limit and re-renders the whole sidebar list on
+ * every snapshot. The Events and Sequence panels therefore show recent history
+ * rather than all of it.
+ */
+const MAX_EVENTS = 500;
+
+function appendEvent(
+  events: StatelyInspectionEvent[],
+  event: StatelyInspectionEvent,
+): StatelyInspectionEvent[] {
+  const next = [...events, event];
+  return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
+}
 
 function parseMachine(definition: string | undefined, fallbackId: string) {
   try {
@@ -68,12 +89,15 @@ function inspectReducer(
   if (action.type === 'panel.select') {
     return { ...state, panel: action.panel };
   }
+  if (action.type === 'view.select') {
+    return { ...state, mainView: action.view };
+  }
   if (action.type === '@xstate.actor') {
     const parsed = parseMachine(action.definition, action.sessionId);
     return {
       ...state,
       selectedSessionId: state.selectedSessionId ?? action.sessionId,
-      events: [...state.events, action],
+      events: appendEvent(state.events, action),
       actors: {
         ...state.actors,
         [action.sessionId]: {
@@ -91,7 +115,7 @@ function inspectReducer(
     const existing = state.actors[action.sessionId];
     return {
       ...state,
-      events: [...state.events, action],
+      events: appendEvent(state.events, action),
       actors: {
         ...state.actors,
         [action.sessionId]: {
@@ -106,15 +130,42 @@ function inspectReducer(
     };
   }
   if (action.type === '@xstate.event') {
-    return { ...state, events: [...state.events, action] };
+    return { ...state, events: appendEvent(state.events, action) };
   }
   return state;
 }
 
-function getActiveIds(snapshot: ActorInfo['snapshot']): Set<string> {
+function collectValueIds(
+  value: unknown,
+  prefix: string,
+  into: Set<string>,
+): void {
+  into.add(prefix);
+  if (typeof value === 'string') {
+    into.add(`${prefix}.${value}`);
+    return;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      collectValueIds(child, `${prefix}.${key}`, into);
+    }
+  }
+}
+
+function getActiveIds(
+  snapshot: ActorInfo['snapshot'],
+  rootId?: string,
+): Set<string> {
   const nodes = (snapshot as { _nodes?: Array<{ id: string }> } | undefined)
     ?._nodes;
-  return new Set(nodes?.map((node) => node.id) ?? []);
+  if (nodes) return new Set(nodes.map((node) => node.id));
+  // Inspection events carry a serialized snapshot (`status`/`value`/`context`)
+  // with no `_nodes`, so derive the active ids from the state value instead.
+  const value = (snapshot as { value?: unknown } | undefined)?.value;
+  if (value === undefined || !rootId) return new Set();
+  const ids = new Set<string>();
+  collectValueIds(value, rootId, ids);
+  return ids;
 }
 
 function formatJson(value: unknown): string {
@@ -139,8 +190,8 @@ function InspectRoute() {
   const selectedActor =
     state.selectedSessionId ? state.actors[state.selectedSessionId] : actors[0];
   const activeIds = useMemo(
-    () => getActiveIds(selectedActor?.snapshot),
-    [selectedActor?.snapshot],
+    () => getActiveIds(selectedActor?.snapshot, selectedActor?.machine?.id),
+    [selectedActor?.snapshot, selectedActor?.machine?.id],
   );
 
   if (!selectedActor) {
@@ -169,6 +220,19 @@ function InspectRoute() {
         </Link>
         <div className="flex items-center gap-1">
           <PanelButton
+            active={state.mainView === 'graph'}
+            onClick={() =>
+              send({
+                type: 'view.select',
+                view: state.mainView === 'graph' ? 'dom' : 'graph',
+              })
+            }
+            icon={<Workflow className="size-4" />}
+            label="Visualization"
+            testId="tab-visualization"
+          />
+          <div className="mx-1 h-5 w-px bg-border" aria-hidden />
+          <PanelButton
             active={state.panel === 'actors'}
             onClick={() => send({ type: 'panel.select', panel: 'actors' })}
             icon={<Boxes className="size-4" />}
@@ -189,13 +253,24 @@ function InspectRoute() {
         </div>
       </header>
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px]">
-        <section className="min-h-0 overflow-auto p-4">
-          {selectedActor.graph ? (
-            <MachineViz graph={selectedActor.graph} activeIds={activeIds} />
-          ) : (
+        <section
+          className={cn(
+            'min-h-0',
+            state.mainView === 'graph' ? 'overflow-hidden' : 'overflow-auto p-4',
+          )}
+        >
+          {!selectedActor.graph ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               No machine definition for {selectedActor.name}.
             </div>
+          ) : state.mainView === 'graph' ? (
+            <GraphPanel
+              layoutKey={selectedActor.sessionId}
+              graph={selectedActor.graph}
+              activeIds={activeIds}
+            />
+          ) : (
+            <MachineViz graph={selectedActor.graph} activeIds={activeIds} />
           )}
         </section>
         <aside className="min-h-0 border-l border-border">
@@ -217,16 +292,20 @@ function PanelButton({
   icon,
   label,
   onClick,
+  testId,
 }: {
   active: boolean;
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      data-testid={testId}
+      aria-pressed={active}
       className={cn(
         'inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-muted',
         active && 'bg-muted text-foreground',

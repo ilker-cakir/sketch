@@ -1,7 +1,7 @@
 # High-performance node graph tab for `/inspect`
 
 Date: 2026-09-21
-Status: approved design, not yet implemented
+Status: implemented
 
 ## Problem
 
@@ -31,15 +31,33 @@ The flow is config-driven, so state count grows with field count.
 
 ## Measurements
 
-Taken on the real machine with elkjs 0.12.0, `layered` + `ORTHOGONAL` +
-`hierarchyHandling: INCLUDE_CHILDREN`:
+Taken on the real machine with elkjs, `layered` + `ORTHOGONAL` +
+`hierarchyHandling: INCLUDE_CHILDREN`. The first column is an early probe with
+uniform node sizes and unlabelled edges; the second is the shipped pipeline,
+with measured node sizes, sized edge labels and container padding.
 
-| Measurement | Result |
-| --- | --- |
-| ELK layout time | 232–470 ms |
-| Laid-out world size | 3961 × 9111 px |
-| Edge geometry | 440 sections, 1864 bend points (~2.3k segments) |
-| elkjs worker bundle | 1.6 MB raw, ~400 KB gzipped |
+| Measurement | Early probe | Shipped pipeline |
+| --- | --- | --- |
+| ELK layout time | 232–470 ms | **318 ms** |
+| `fromElk` + `buildScene` | — | 2 ms |
+| Laid-out world size | 3961 × 9111 px | 3163 × 6255 px |
+| Dropped edges | — | 0 |
+
+Two layout options were measured but not adopted: `considerModelOrder=NONE`
+takes 186 ms but loses declaration-order stability, and `SEPARATE_CHILDREN`
+takes 73 ms but routes cross-boundary edges only at the top level. 318 ms once
+per actor is well within budget, so readability wins.
+
+Built client chunks:
+
+| Chunk | Raw | Gzipped |
+| --- | --- | --- |
+| `layout.worker` (elkjs) | 1.4 MB | 428 KB |
+| `elk.bundled` (main-thread fallback) | 1.4 MB | 428 KB |
+| `inspect` route | 55 KB | 18 KB |
+
+Both elkjs chunks are loaded only when the Visualization tab is opened, and
+only one of the two is ever fetched in a given session.
 
 Two conclusions follow directly.
 
@@ -102,13 +120,32 @@ Each has one purpose, a small interface, and is testable in isolation.
 | To-ELK | `src/lib/layout/to-elk.ts` | `MachineGraph → ElkNode` tree. Nests children, hoists each edge into its endpoints' lowest common ancestor container, drops dangling edges, attaches per-node layout options. | `@statelyai/graph` queries |
 | Worker | `src/lib/layout/layout.worker.ts` | Lazy-imports elkjs, runs `elk.layout`, posts the result back. | elkjs |
 | Layout client | `src/lib/layout/client.ts` | Spawns the worker, tags requests with an id, drops stale results, caches by actor `sessionId`, falls back to main-thread layout on worker failure. | worker |
-| From-ELK | `src/lib/layout/from-elk.ts` | ELK result → `LayoutGraph` with **absolute** coordinates. ELK emits child node coords and edge section coords relative to their container; this unit accumulates them. Highest-risk logic in the change. | — |
+| From-ELK | `src/lib/layout/from-elk.ts` | ELK result → `LayoutGraph` with **absolute** coordinates. See *ELK coordinate convention* below. Highest-risk logic in the change. | — |
 | Scene | `src/lib/canvas/scene.ts` | Draw-ready flat arrays plus a uniform spatial grid (~256px cells) indexing nodes and edge segments for hit-testing. | — |
 | Camera | `src/lib/canvas/camera.ts` | Pan, zoom about a point, fit-to-bounds, screen↔world transforms. | — |
 | Renderer | `src/lib/canvas/renderer.ts` | `draw(ctx, scene, camera, ui)`. Viewport culling, zoom LOD, device-pixel-ratio handling. | scene, camera |
 | Interaction | `src/lib/canvas/interaction.ts` | Pointer and wheel events → camera updates and hit-test results. | scene, camera |
 | Canvas component | `src/components/GraphCanvas.tsx` | Owns the `<canvas>` ref, mounts the renderer, exposes an imperative handle (`setActive`, `fit`, `zoomTo`). Renders once. | renderer, interaction |
 | Panel component | `src/components/GraphPanel.tsx` | Wires `/inspect` state to `GraphCanvas`. Loading, empty and error states. Toolbar: fit, zoom in/out, reset. | GraphCanvas, layout client |
+
+### ELK coordinate convention
+
+Node coordinates are relative to the parent node. **Edge** coordinates are
+relative to the lowest common ancestor of the edge's endpoints — *not* the node
+whose `edges` array holds the edge, because ELK normalises edge containment
+during hierarchical layout.
+
+The distinction only shows up for an edge between a container and its own
+descendant, where the LCA is the container itself. Getting it wrong displaces
+exactly those edges by the container's offset while every other edge looks
+correct: in the traffic-light fixture, `trafficLight.red → trafficLight.red.flash`
+landed 307 px from its source. `toElk` therefore records the LCA per edge in
+`edgeOriginById`, and `fromElk` adds back that node's absolute position rather
+than the position of wherever the edge turned up in the output tree.
+
+The `fromElk` test asserts the invariant directly: every routed edge's first
+point lies within 2 px of its source box and its last point within 2 px of its
+target box.
 
 ### Why not `@statelyai/graph/elk`
 
@@ -207,8 +244,15 @@ bottleneck if 500 rows proves too slow to re-render.
 | `scene` | Hit-test returns the deepest node under a point; returns an edge within tolerance. |
 | `measure` | Deterministic size as a function of content. |
 
-Fixtures: the existing `trafficLight` default machine, plus a synthetically
-generated large graph for a perf smoke test with a generous budget.
+Fixtures: the existing `trafficLight` default machine (nested states and a
+cross-boundary transition) and a small machine carrying both a self-targeted
+and a targetless transition.
+
+Note that `final-initial-state-machine.js` in the funnel repo is a raw
+`machine.definition` dump, which `createMachine` rejects (`initial` is an object,
+not a state key). It is unusable as a fixture. This is not a limitation of the
+live path: `@statelyai/inspect` sends `actorRef.logic.config`, a real machine
+config, which `parseMachine` loads correctly.
 
 ### Playwright — `e2e/inspect-graph.spec.ts`
 
