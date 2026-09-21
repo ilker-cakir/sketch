@@ -16,6 +16,8 @@ import {
   type Camera,
 } from './camera';
 import { buildScene, hitTestEdge, hitTestNode } from './scene';
+import { EDGE_ICON_WIDTH, measureEdgeLabel } from '@/lib/layout/measure';
+import type { LayoutEdge } from '@/lib/layout/types';
 
 const fakeMeasure: MeasureText = (text, font) => {
   const size = Number(font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 12);
@@ -237,5 +239,150 @@ describe('scene', () => {
       expect(hitTestEdge(scene, { x: 400, y: 90 }, 4)).toBe(null);
       expect(hitTestEdge(scene, { x: 400, y: 90 }, 20)?.id).toBe('e1');
     });
+  });
+});
+
+function edge(
+  id: string,
+  sourceId: string,
+  targetId: string,
+  data: Partial<LayoutEdge['data']> = {},
+): LayoutEdge {
+  return {
+    id,
+    sourceId,
+    targetId,
+    data: {
+      eventType: 'GO',
+      displayEvent: 'GO',
+      guard: null,
+      guardPrefix: '',
+      actions: [],
+      isTargetless: false,
+      ...data,
+    },
+    points: [],
+    label: null,
+    isSelf: sourceId === targetId,
+  };
+}
+
+describe('choice-state detection', () => {
+  const build = (edges: LayoutEdge[], data = {}) =>
+    buildScene(
+      {
+        width: 100,
+        height: 100,
+        droppedEdgeCount: 0,
+        nodes: [
+          node('pick', { x: 0, y: 0, width: 140, height: 28 }, {
+            data: {
+              key: 'pick', type: 'atomic', entry: [], exit: [],
+              invocations: [], initialId: null, ...data,
+            },
+          }),
+          node('a', { x: 200, y: 0, width: 140, height: 28 }),
+          node('b', { x: 200, y: 60, width: 140, height: 28 }),
+        ],
+        edges,
+      },
+      fakeMeasure,
+    ).nodeById.get('pick')!;
+
+  const guardedAlways = (id: string, target: string, guard: string) =>
+    edge(id, 'pick', target, { eventType: '(always)', displayEvent: '', guard });
+
+  it('marks an atomic state whose exits are all guarded always-transitions', () => {
+    expect(build([guardedAlways('e1', 'a', 'isNew'), guardedAlways('e2', 'b', 'isOld')]).isChoice)
+      .toBe(true);
+  });
+
+  it('does not mark a state with a single exit', () => {
+    expect(build([guardedAlways('e1', 'a', 'isNew')]).isChoice).toBe(false);
+  });
+
+  it('does not mark a state with an unguarded always-transition', () => {
+    expect(
+      build([
+        guardedAlways('e1', 'a', 'isNew'),
+        edge('e2', 'pick', 'b', { eventType: '(always)', displayEvent: '', guard: null }),
+      ]).isChoice,
+    ).toBe(false);
+  });
+
+  it('does not mark a state that also reacts to a named event', () => {
+    expect(
+      build([guardedAlways('e1', 'a', 'isNew'), edge('e2', 'pick', 'b')]).isChoice,
+    ).toBe(false);
+  });
+
+  it('does not mark a state that invokes something', () => {
+    expect(
+      build(
+        [guardedAlways('e1', 'a', 'isNew'), guardedAlways('e2', 'b', 'isOld')],
+        { invocations: ['fetchUser'] },
+      ).isChoice,
+    ).toBe(false);
+  });
+});
+
+describe('outgoing edge index', () => {
+  it('groups edge ids by source so hover can emphasise them', () => {
+    const scene = buildScene(
+      {
+        width: 100, height: 100, droppedEdgeCount: 0,
+        nodes: [
+          node('a', { x: 0, y: 0, width: 10, height: 10 }),
+          node('b', { x: 20, y: 0, width: 10, height: 10 }),
+        ],
+        edges: [edge('e1', 'a', 'b'), edge('e2', 'a', 'b'), edge('e3', 'b', 'a')],
+      },
+      fakeMeasure,
+    );
+    expect(scene.outEdgeIds.get('a')).toEqual(['e1', 'e2']);
+    expect(scene.outEdgeIds.get('b')).toEqual(['e3']);
+    expect(scene.outEdgeIds.get('missing')).toBeUndefined();
+  });
+});
+
+describe('measureEdgeLabel', () => {
+  const data = (over: Partial<LayoutEdge['data']>) => edge('e', 'a', 'b', over).data;
+
+  it('sizes a plain event label', () => {
+    const label = measureEdgeLabel(data({}), fakeMeasure)!;
+    expect(label.text).toBe('GO');
+    expect(label.width).toBeGreaterThan(0);
+  });
+
+  it('reserves width for the category glyph', () => {
+    const plain = measureEdgeLabel(data({ eventType: 'GO' }), fakeMeasure)!;
+    const timed = measureEdgeLabel(
+      data({ eventType: 'xstate.after(500).s', displayEvent: 'GO' }),
+      fakeMeasure,
+    )!;
+    expect(timed.width).toBeGreaterThan(plain.width);
+  });
+
+  it('reserves width for a guard', () => {
+    const plain = measureEdgeLabel(data({}), fakeMeasure)!;
+    const guarded = measureEdgeLabel(data({ guard: 'isReady' }), fakeMeasure)!;
+    expect(guarded.width).toBeGreaterThan(plain.width);
+  });
+
+  it('shows no text for an always transition — the glyph carries it', () => {
+    // Falling back to `eventType` here would print the literal "(always)".
+    const label = measureEdgeLabel(
+      data({ eventType: '(always)', displayEvent: '', guard: 'isReady' }),
+      fakeMeasure,
+    );
+    expect(label.text).toBe('');
+    expect(label.width).toBeGreaterThan(0);
+  });
+
+  it('still reserves a glyph box for an empty event type', () => {
+    // An empty event type is an always transition, not a missing label.
+    const label = measureEdgeLabel(data({ eventType: '', displayEvent: '' }), fakeMeasure);
+    expect(label.text).toBe('');
+    expect(label.width).toBeGreaterThanOrEqual(EDGE_ICON_WIDTH);
   });
 });

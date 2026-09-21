@@ -9,11 +9,17 @@ import {
   type MeasureText,
   type NodeRow,
 } from '@/lib/layout/measure';
+import { getEventCategory } from '@/lib/machine';
 
 /** A node with its text pre-fitted to the box, so drawing does no measuring. */
 export interface SceneNode extends LayoutNode {
   headerText: string;
   rows: NodeRow[];
+  /**
+   * An atomic state whose only exits are guarded `always` transitions — drawn
+   * as a diamond, matching how `StateNodeViz` marks a choice pseudostate.
+   */
+  isChoice: boolean;
 }
 
 export interface Scene {
@@ -27,6 +33,8 @@ export interface Scene {
   /** Grid of edge indices, keyed by cell, for pointer proximity queries. */
   edgeGrid: Map<string, number[]>;
   cellSize: number;
+  /** Outgoing edge ids per node, for emphasising a hovered node's transitions. */
+  outEdgeIds: Map<string, string[]>;
 }
 
 const CELL_SIZE = 256;
@@ -84,6 +92,29 @@ export function buildScene(
   layout: LayoutGraph,
   measureText: MeasureText,
 ): Scene {
+  const outEdges = new Map<string, LayoutEdge[]>();
+  for (const edge of layout.edges) {
+    const bucket = outEdges.get(edge.sourceId);
+    if (bucket) bucket.push(edge);
+    else outEdges.set(edge.sourceId, [edge]);
+  }
+  const outEdgeIds = new Map<string, string[]>(
+    [...outEdges].map(([id, edges]) => [id, edges.map((e) => e.id)]),
+  );
+
+  const isChoiceNode = (node: LayoutNode): boolean => {
+    if (node.isContainer) return false;
+    if (node.data.type !== 'atomic' && node.data.type !== null) return false;
+    if (node.data.invocations.length > 0) return false;
+    const edges = outEdges.get(node.id) ?? [];
+    return (
+      edges.length > 1 &&
+      edges.every(
+        (e) => getEventCategory(e.data.eventType) === 'always' && !!e.data.guard,
+      )
+    );
+  };
+
   const nodes: SceneNode[] = layout.nodes.map((node) => {
     const headerBudget = node.width - NODE_PAD_X * 2 - GLYPH_WIDTH;
     return {
@@ -92,6 +123,7 @@ export function buildScene(
       rows: node.isContainer
         ? []
         : rowsFitToWidth(nodeRows(node.data), node.width, measureText),
+      isChoice: isChoiceNode(node),
     };
   });
 
@@ -111,6 +143,7 @@ export function buildScene(
     droppedEdgeCount: layout.droppedEdgeCount,
     edgeGrid,
     cellSize: CELL_SIZE,
+    outEdgeIds,
   };
 }
 

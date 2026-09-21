@@ -111,30 +111,16 @@ async function waitForPaint(page: Page): Promise<CanvasProbe> {
   return probeCanvas(page);
 }
 
-test.describe('Inspect graph visualization', () => {
+test.describe('/visualize', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/inspect');
+    await page.goto('/visualize');
     await expect(page.getByText('Waiting for inspection')).toBeVisible();
     await connectActor(page);
-    await expect(page.getByTestId('tab-visualization')).toBeVisible();
   });
 
-  test('defaults to the DOM renderer and keeps the tab unpressed', async ({ page }) => {
-    await expect(page.getByTestId('machine-root')).toBeVisible();
-    await expect(page.getByTestId('graph-canvas')).toHaveCount(0);
-    await expect(page.getByTestId('tab-visualization')).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    );
-  });
-
-  test('swaps the main pane to the canvas and paints the graph', async ({ page }) => {
-    await page.getByTestId('tab-visualization').click();
-
+  test('paints the graph on a full-bleed canvas', async ({ page }) => {
     const canvas = page.getByTestId('graph-canvas');
     await expect(canvas).toBeVisible();
-    await expect(page.getByTestId('machine-root')).toHaveCount(0);
-    await expect(page.getByTestId('graph-loading')).toHaveCount(0);
     await expect(page.getByTestId('graph-error')).toHaveCount(0);
 
     const box = await canvas.boundingBox();
@@ -145,28 +131,7 @@ test.describe('Inspect graph visualization', () => {
     await waitForPaint(page);
   });
 
-  test('keeps the sidebar panel selection independent of the tab', async ({ page }) => {
-    await page.getByRole('button', { name: 'Actors' }).click();
-    await page.getByTestId('tab-visualization').click();
-
-    await expect(page.getByTestId('graph-canvas')).toBeVisible();
-    // The Actors panel is still the one showing in the sidebar.
-    await expect(page.getByText(SESSION_ID).first()).toBeVisible();
-  });
-
-  test('toggles back to the DOM renderer', async ({ page }) => {
-    await page.getByTestId('tab-visualization').click();
-    await expect(page.getByTestId('graph-canvas')).toBeVisible();
-
-    await page.getByTestId('tab-visualization').click();
-    await expect(page.getByTestId('graph-canvas')).toHaveCount(0);
-    await expect(page.getByTestId('machine-root')).toBeVisible();
-  });
-
   test('repaints when a snapshot changes the active state', async ({ page }) => {
-    await page.getByTestId('tab-visualization').click();
-    await expect(page.getByTestId('graph-canvas')).toBeVisible();
-
     const before = await waitForPaint(page);
 
     await sendSnapshot(page, { payment: 'processing' });
@@ -178,10 +143,7 @@ test.describe('Inspect graph visualization', () => {
   });
 
   test('selects a node on click', async ({ page }) => {
-    await page.getByTestId('tab-visualization').click();
     const canvas = page.getByTestId('graph-canvas');
-    await expect(canvas).toBeVisible();
-
     await waitForPaint(page);
 
     const box = (await canvas.boundingBox())!;
@@ -193,8 +155,7 @@ test.describe('Inspect graph visualization', () => {
   });
 
   test('exposes zoom and fit controls', async ({ page }) => {
-    await page.getByTestId('tab-visualization').click();
-    await expect(page.getByTestId('graph-canvas')).toBeVisible();
+    await waitForPaint(page);
 
     await expect(page.getByRole('button', { name: 'Fit to view' })).toBeVisible();
     await page.getByRole('button', { name: 'Zoom in' }).click();
@@ -202,5 +163,49 @@ test.describe('Inspect graph visualization', () => {
     await page.getByRole('button', { name: 'Fit to view' }).click();
 
     await waitForPaint(page);
+  });
+});
+
+test.describe('switching between /inspect and /visualize', () => {
+  test('carries the live stream across both routes', async ({ page }) => {
+    await page.goto('/inspect');
+    await expect(page.getByText('Waiting for inspection')).toBeVisible();
+    await connectActor(page);
+
+    // /inspect keeps the DOM renderer and its own sidebar.
+    await expect(page.getByTestId('machine-root')).toBeVisible();
+    await expect(page.getByTestId('graph-canvas')).toHaveCount(0);
+
+    await page.getByTestId('nav-visualize').click();
+    await expect(page).toHaveURL(/\/visualize$/);
+    // The actor survives the navigation: no reconnection, no empty state.
+    await expect(page.getByText('Waiting for inspection')).toHaveCount(0);
+    await waitForPaint(page);
+
+    await page.getByTestId('nav-inspect').click();
+    await expect(page).toHaveURL(/\/inspect$/);
+    await expect(page.getByTestId('machine-root')).toBeVisible();
+    await expect(page.getByTestId('graph-canvas')).toHaveCount(0);
+  });
+
+  test('keeps snapshots flowing to whichever route is open', async ({ page }) => {
+    await page.goto('/inspect');
+    await expect(page.getByText('Waiting for inspection')).toBeVisible();
+    await connectActor(page);
+    await expect(page.getByTestId('machine-root')).toBeVisible();
+
+    // A snapshot that arrives while /inspect is showing must still be the one
+    // /visualize renders after navigation.
+    await sendSnapshot(page, { payment: 'processing' });
+    await page.getByTestId('nav-visualize').click();
+    await waitForPaint(page);
+
+    await expect(page.getByTestId('graph-error')).toHaveCount(0);
+  });
+
+  test('marks the current route in the nav', async ({ page }) => {
+    await page.goto('/visualize');
+    await expect(page.getByTestId('nav-visualize')).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByTestId('nav-inspect')).not.toHaveAttribute('aria-current', 'page');
   });
 });

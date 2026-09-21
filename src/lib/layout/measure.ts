@@ -1,4 +1,5 @@
-import type { StateNodeData } from '@/lib/machine';
+import type { StateNodeData, TransitionData } from '@/lib/machine';
+import { getEventCategory } from '@/lib/machine';
 
 /** Measures the advance width of `text` at the given CSS font shorthand. */
 export type MeasureText = (text: string, font: string) => number;
@@ -85,11 +86,15 @@ function rowWidth(row: NodeRow, measureText: MeasureText): number {
       return measureText(row.text, FONT_BODY);
     case 'invoke':
       return chipRowWidth('INVOKE', row.items, measureText);
-    case 'actions':
-      return Math.max(
-        row.entry.length > 0 ? chipRowWidth('ENTRY', row.entry, measureText) : 0,
-        row.exit.length > 0 ? chipRowWidth('EXIT', row.exit, measureText) : 0,
-      );
+    case 'actions': {
+      const entry =
+        row.entry.length > 0 ? chipRowWidth('ENTRY', row.entry, measureText) : 0;
+      const exit =
+        row.exit.length > 0 ? chipRowWidth('EXIT', row.exit, measureText) : 0;
+      // Entry and exit render side by side in equal halves, so the row needs
+      // twice the wider column — not the wider of the two.
+      return entry > 0 && exit > 0 ? Math.max(entry, exit) * 2 : entry + exit;
+    }
   }
 }
 
@@ -119,13 +124,48 @@ export function measureNode(
   return { width, height: headerHeight, headerHeight, rows };
 }
 
-/** Size of an edge's label box, or null when the edge has nothing to show. */
+export const EDGE_LABEL_HEIGHT = 18;
+export const EDGE_LABEL_PAD_X = 6;
+/** Space reserved for the event-category glyph (timer, always, done, error). */
+export const EDGE_ICON_WIDTH = 13;
+/** Separator between the event name and its guard. */
+export const EDGE_GUARD_GAP = 6;
+
+/**
+ * The text a transition's label shows.
+ *
+ * `displayEvent` is already the cleaned-up form, and it is empty for `always`
+ * transitions — those are conveyed by the category glyph alone, exactly as the
+ * DOM renderer does. Falling back to `eventType` here would print the literal
+ * string `(always)`.
+ */
+export function edgeLabelText(data: TransitionData): string {
+  return data.displayEvent ?? '';
+}
+
+/**
+ * Size of a transition's label box.
+ *
+ * The box has to fit the same information the DOM renderer shows inline: a
+ * category glyph, the event name, and the guard when there is one. Every
+ * transition gets a box — one with no event name still carries a glyph, since
+ * an empty event type is an `always` transition.
+ */
 export function measureEdgeLabel(
-  text: string,
+  data: TransitionData,
   measureText: MeasureText,
-): { width: number; height: number } | null {
-  if (!text) return null;
-  return { width: Math.ceil(measureText(text, FONT_LABEL)) + 8, height: 16 };
+): { width: number; height: number; text: string } {
+  const text = edgeLabelText(data);
+  const hasIcon = getEventCategory(data.eventType) !== null;
+
+  let width = EDGE_LABEL_PAD_X * 2;
+  if (hasIcon) width += EDGE_ICON_WIDTH;
+  if (text) width += measureText(text, FONT_LABEL);
+  if (data.guard) {
+    width += EDGE_GUARD_GAP + measureText(`[${data.guard}]`, FONT_BODY);
+  }
+
+  return { width: Math.ceil(width), height: EDGE_LABEL_HEIGHT, text };
 }
 
 /**

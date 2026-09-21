@@ -137,14 +137,12 @@ export function toElk(
       continue;
     }
 
-    const labelText = edge.data.displayEvent || edge.data.eventType;
-    const labelSize = measureEdgeLabel(labelText, measureText);
     const elkEdge: ElkExtendedEdge = {
       id: edge.id,
       sources: [edge.sourceId],
       targets: [edge.targetId],
       sections: [],
-      ...(labelSize ? { labels: [{ text: labelText, ...labelSize }] } : {}),
+      labels: [measureEdgeLabel(edge.data, measureText)],
     };
 
     // ELK expresses the edge's geometry relative to the lowest common ancestor

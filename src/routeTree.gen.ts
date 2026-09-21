@@ -9,10 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as VisualizeRouteImport } from './routes/visualize'
 import { Route as InspectRouteImport } from './routes/inspect'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as VizSourceFileIdRouteImport } from './routes/viz/$sourceFileId'
 
+const VisualizeRoute = VisualizeRouteImport.update({
+  id: '/visualize',
+  path: '/visualize',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const InspectRoute = InspectRouteImport.update({
   id: '/inspect',
   path: '/inspect',
@@ -32,35 +38,46 @@ const VizSourceFileIdRoute = VizSourceFileIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/inspect': typeof InspectRoute
+  '/visualize': typeof VisualizeRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/inspect': typeof InspectRoute
+  '/visualize': typeof VisualizeRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/inspect': typeof InspectRoute
+  '/visualize': typeof VisualizeRoute
   '/viz/$sourceFileId': typeof VizSourceFileIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/inspect' | '/viz/$sourceFileId'
+  fullPaths: '/' | '/inspect' | '/visualize' | '/viz/$sourceFileId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/inspect' | '/viz/$sourceFileId'
-  id: '__root__' | '/' | '/inspect' | '/viz/$sourceFileId'
+  to: '/' | '/inspect' | '/visualize' | '/viz/$sourceFileId'
+  id: '__root__' | '/' | '/inspect' | '/visualize' | '/viz/$sourceFileId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   InspectRoute: typeof InspectRoute
+  VisualizeRoute: typeof VisualizeRoute
   VizSourceFileIdRoute: typeof VizSourceFileIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/visualize': {
+      id: '/visualize'
+      path: '/visualize'
+      fullPath: '/visualize'
+      preLoaderRoute: typeof VisualizeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/inspect': {
       id: '/inspect'
       path: '/inspect'
@@ -88,6 +105,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   InspectRoute: InspectRoute,
+  VisualizeRoute: VisualizeRoute,
   VizSourceFileIdRoute: VizSourceFileIdRoute,
 }
 export const routeTree = rootRouteImport

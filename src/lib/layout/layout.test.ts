@@ -93,6 +93,22 @@ describe('measureNode', () => {
     expect(full.headerHeight).toBe(bare.headerHeight + 3 * 18);
   });
 
+  it('sizes an entry+exit row for two side-by-side columns', () => {
+    // The renderer splits the row in half, so a node sized for only the wider
+    // column lets the two lists overlap.
+    const base = {
+      key: 'x', type: 'atomic' as const, entry: [], exit: [],
+      invocations: [], initialId: null,
+    };
+    const entryOnly = measureNode({ ...base, entry: ['trackCartView'] }, fakeMeasure);
+    const both = measureNode(
+      { ...base, entry: ['trackCartView'], exit: ['persistCart'] },
+      fakeMeasure,
+    );
+    expect(both.width).toBeGreaterThanOrEqual(entryOnly.width * 2 - 2 * 10 * 2);
+    expect(both.width).toBeGreaterThan(entryOnly.width);
+  });
+
   it('never exceeds the maximum width', () => {
     const metrics = measureNode(
       {

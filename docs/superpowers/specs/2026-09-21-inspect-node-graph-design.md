@@ -1,4 +1,4 @@
-# High-performance node graph tab for `/inspect`
+# High-performance node graph for live inspection
 
 Date: 2026-09-21
 Status: implemented
@@ -75,26 +75,27 @@ React path, not from the GPU.
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Placement | "Visualization" button, first in the `/inspect` header group, swaps the **main** pane | Sidebar is 360px; a 3961×9111 graph needs the main pane. Old DOM viz stays reachable. |
-| Scope | `/inspect` only | Editor route `/` keeps the nested-DOM renderer. |
+| Placement | Its own `/visualize` route, beside `/inspect` | Two addressable modes you can move between, rather than one route with a hidden toggle. |
+| Scope | Live inspection only | Editor route `/` keeps the nested-DOM renderer. |
 | Interactivity | Pan, zoom, fit, hover highlight, click-to-select, live active highlighting | No editing, no node dragging. |
 | Layout engine | elkjs `layered`, in a Worker | Only mainstream engine with compound/hierarchical layout + orthogonal routing with bend points. dagre is deprecated and does not nest; d3-dag does not nest. |
 | Render target | Canvas 2D, retained scene | Sufficient to ~5k elements; no SDF text, picking buffers or large dependency. Draw call can be swapped for WebGL later without touching layout, scene or interaction. |
 
-### Tab wiring
+### Route wiring
 
-The header button group becomes `[Visualization] [Actors] [Sequence] [Events]`.
-These are two independent controls rendered as one group, not four members of one
-union:
+The graph lives at `/visualize`; `/inspect` keeps its original layout
+unchanged — the nested-DOM renderer in the main pane and the
+Actors/Sequence/Events sidebar. A shared `InspectHeader` puts an
+`Inspect | Visualize` nav on both.
 
-- `InspectState.panel: 'actors' | 'sequence' | 'events'` is **unchanged** and keeps
-  driving the 360px sidebar.
-- A new `InspectState.mainView: 'dom' | 'graph'` drives the main pane, defaulting
-  to `'dom'` so current behaviour is preserved until the tab is clicked.
+Both routes read one module-level store, `src/lib/inspect-store.ts`, which owns
+the `createBrowserReceiver` subscription, the actor map, the bounded event log
+and the selected actor. Putting it at module scope rather than in a route
+component is what makes switching work: navigating between the two does not
+tear down the receiver, drop the actor list, or need the inspector to
+reconnect. React reads it through `useSyncExternalStore`.
 
-Clicking Visualization toggles `mainView`; the sidebar keeps whichever panel was
-last selected and stays visible. The Visualization button renders as active when
-`mainView === 'graph'`, independently of which sidebar panel is active.
+Either URL can be given to `createBrowserInspector`.
 
 ## Architecture
 
@@ -196,6 +197,28 @@ Information parity with the Stately visualizer:
 - Self-transitions and targetless transitions: loop glyph on the node.
 - Active states: the existing `primary` colour token, read from CSS custom
   properties so dark mode continues to work.
+
+The canvas deliberately mirrors the DOM renderer's visual language rather than
+inventing its own:
+
+| Element | Treatment |
+| --- | --- |
+| Node card | 1.75px border, rounded, drop shadow, `card` fill — `border-2` in the DOM |
+| Container | Translucent `foreground` wash that lightens with depth |
+| Parallel region | Dashed border |
+| Final state | Concentric inner ring (the DOM's `border-double`) |
+| Initial state | Filled dot and stub |
+| Choice state | Rotated square, detected the same way `StateNodeViz` does |
+| History state | Boxed `H` / `H*` |
+| Active leaf | Primary border and 13% primary fill |
+| Active ancestor | Primary border at reduced opacity — it is only on the path |
+| Entry / exit | Two clipped columns with a divider |
+| Transition label | Bordered pill with a category glyph, event name, and guard in primary |
+| Self / targetless | Arrowed loop above the node's top-right corner |
+| Background | Faint dot grid, so panning empty space still reads as movement |
+
+Hovering a node draws its outgoing transitions at full strength and fades the
+rest, the canvas equivalent of the DOM renderer's hover highlighting.
 
 ### Zoom level-of-detail
 

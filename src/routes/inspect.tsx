@@ -1,172 +1,28 @@
-import { createFileRoute, Link } from '@tanstack/react-router';
-import {
-  createBrowserReceiver,
-  type StatelyActorEvent,
-  type StatelyInspectionEvent,
-} from '@statelyai/inspect';
-import { useEffect, useMemo, useReducer } from 'react';
-import type React from 'react';
-import { createMachine, type AnyStateMachine } from 'xstate';
-import {
-  Activity,
-  ArrowDownWideNarrow,
-  Boxes,
-  ListOrdered,
-  Workflow,
-} from 'lucide-react';
+import { createFileRoute } from '@tanstack/react-router';
+import type { StatelyInspectionEvent } from '@statelyai/inspect';
+import { useMemo, useState } from 'react';
+import { ArrowDownWideNarrow, Boxes, ListOrdered } from 'lucide-react';
 import { MachineViz } from '@/components/MachineViz';
-import { GraphPanel } from '@/components/GraphPanel';
-import { machineToGraph, type MachineGraph } from '@/lib/machine';
+import {
+  InspectHeader,
+  PanelButton,
+  WaitingForInspection,
+} from '@/components/InspectChrome';
+import {
+  getActiveIds,
+  getSelectedActor,
+  selectActor,
+  useInspectState,
+  type ActorInfo,
+  type InspectState,
+} from '@/lib/inspect-store';
 import { cn } from '@/lib/utils';
 
 export const Route = createFileRoute('/inspect')({
   component: InspectRoute,
 });
 
-type ActorInfo = {
-  sessionId: string;
-  name: string;
-  parentId?: string;
-  machine?: AnyStateMachine;
-  graph?: MachineGraph;
-  snapshot?: StatelyActorEvent['snapshot'];
-};
-
-type InspectState = {
-  actors: Record<string, ActorInfo>;
-  events: StatelyInspectionEvent[];
-  selectedSessionId?: string;
-  panel: 'actors' | 'sequence' | 'events';
-  mainView: 'dom' | 'graph';
-};
-
-type InspectAction =
-  | StatelyInspectionEvent
-  | { type: 'actor.select'; sessionId: string }
-  | { type: 'panel.select'; panel: InspectState['panel'] }
-  | { type: 'view.select'; view: InspectState['mainView'] };
-
-const initialInspectState: InspectState = {
-  actors: {},
-  events: [],
-  panel: 'events',
-  mainView: 'dom',
-};
-
-/**
- * Inspection events arrive at keystroke rate, so the log is bounded: an
- * unbounded array grows without limit and re-renders the whole sidebar list on
- * every snapshot. The Events and Sequence panels therefore show recent history
- * rather than all of it.
- */
-const MAX_EVENTS = 500;
-
-function appendEvent(
-  events: StatelyInspectionEvent[],
-  event: StatelyInspectionEvent,
-): StatelyInspectionEvent[] {
-  const next = [...events, event];
-  return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
-}
-
-function parseMachine(definition: string | undefined, fallbackId: string) {
-  try {
-    const config = definition ? JSON.parse(definition) : { id: fallbackId };
-    const machine = createMachine(config);
-    return { machine, graph: machineToGraph(machine) };
-  } catch {
-    return {};
-  }
-}
-
-function inspectReducer(
-  state: InspectState,
-  action: InspectAction,
-): InspectState {
-  if (action.type === 'actor.select') {
-    return { ...state, selectedSessionId: action.sessionId };
-  }
-  if (action.type === 'panel.select') {
-    return { ...state, panel: action.panel };
-  }
-  if (action.type === 'view.select') {
-    return { ...state, mainView: action.view };
-  }
-  if (action.type === '@xstate.actor') {
-    const parsed = parseMachine(action.definition, action.sessionId);
-    return {
-      ...state,
-      selectedSessionId: state.selectedSessionId ?? action.sessionId,
-      events: appendEvent(state.events, action),
-      actors: {
-        ...state.actors,
-        [action.sessionId]: {
-          ...state.actors[action.sessionId],
-          sessionId: action.sessionId,
-          name: action.name || action.sessionId,
-          parentId: action.parentId,
-          snapshot: action.snapshot,
-          ...parsed,
-        },
-      },
-    };
-  }
-  if (action.type === '@xstate.snapshot') {
-    const existing = state.actors[action.sessionId];
-    return {
-      ...state,
-      events: appendEvent(state.events, action),
-      actors: {
-        ...state.actors,
-        [action.sessionId]: {
-          sessionId: action.sessionId,
-          name: existing?.name ?? action.sessionId,
-          parentId: existing?.parentId,
-          machine: existing?.machine,
-          graph: existing?.graph,
-          snapshot: action.snapshot,
-        },
-      },
-    };
-  }
-  if (action.type === '@xstate.event') {
-    return { ...state, events: appendEvent(state.events, action) };
-  }
-  return state;
-}
-
-function collectValueIds(
-  value: unknown,
-  prefix: string,
-  into: Set<string>,
-): void {
-  into.add(prefix);
-  if (typeof value === 'string') {
-    into.add(`${prefix}.${value}`);
-    return;
-  }
-  if (value && typeof value === 'object') {
-    for (const [key, child] of Object.entries(value)) {
-      collectValueIds(child, `${prefix}.${key}`, into);
-    }
-  }
-}
-
-function getActiveIds(
-  snapshot: ActorInfo['snapshot'],
-  rootId?: string,
-): Set<string> {
-  const nodes = (snapshot as { _nodes?: Array<{ id: string }> } | undefined)
-    ?._nodes;
-  if (nodes) return new Set(nodes.map((node) => node.id));
-  // Inspection events carry a serialized snapshot (`status`/`value`/`context`)
-  // with no `_nodes`, so derive the active ids from the state value instead.
-  const value = (snapshot as { value?: unknown } | undefined)?.value;
-  if (value === undefined || !rootId) return new Set();
-  const ids = new Set<string>();
-  collectValueIds(value, rootId, ids);
-  return ids;
-}
+type Panel = 'actors' | 'sequence' | 'events';
 
 function formatJson(value: unknown): string {
   if (value === undefined) return 'undefined';
@@ -178,105 +34,54 @@ function formatJson(value: unknown): string {
 }
 
 function InspectRoute() {
-  const [state, send] = useReducer(inspectReducer, initialInspectState);
+  const state = useInspectState();
+  const [panel, setPanel] = useState<Panel>('events');
 
-  useEffect(() => {
-    const receiver = createBrowserReceiver();
-    const sub = receiver.subscribe((event) => send(event));
-    return () => sub.unsubscribe();
-  }, []);
-
-  const actors = Object.values(state.actors);
-  const selectedActor =
-    state.selectedSessionId ? state.actors[state.selectedSessionId] : actors[0];
+  const selectedActor = getSelectedActor(state);
   const activeIds = useMemo(
     () => getActiveIds(selectedActor?.snapshot, selectedActor?.machine?.id),
     [selectedActor?.snapshot, selectedActor?.machine?.id],
   );
 
-  if (!selectedActor) {
-    return (
-      <main className="flex h-screen items-center justify-center bg-background text-foreground">
-        <div className="max-w-md px-6 text-center">
-          <Activity className="mx-auto mb-4 size-8 text-muted-foreground" />
-          <h1 className="text-xl font-semibold">Waiting for inspection</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Use{' '}
-            <code className="font-mono">
-              createBrowserInspector({`{ url: 'https://sketch.stately.ai/inspect' }`})
-            </code>
-            .
-          </p>
-        </div>
-      </main>
-    );
-  }
+  if (!selectedActor) return <WaitingForInspection route="/inspect" />;
 
   return (
     <main className="flex h-screen min-h-0 flex-col bg-background text-foreground">
-      <header className="flex h-11 shrink-0 items-center justify-between border-b border-border px-3">
-        <Link to="/" className="text-sm font-semibold">
-          Stately Sketch
-        </Link>
-        <div className="flex items-center gap-1">
-          <PanelButton
-            active={state.mainView === 'graph'}
-            onClick={() =>
-              send({
-                type: 'view.select',
-                view: state.mainView === 'graph' ? 'dom' : 'graph',
-              })
-            }
-            icon={<Workflow className="size-4" />}
-            label="Visualization"
-            testId="tab-visualization"
-          />
-          <div className="mx-1 h-5 w-px bg-border" aria-hidden />
-          <PanelButton
-            active={state.panel === 'actors'}
-            onClick={() => send({ type: 'panel.select', panel: 'actors' })}
-            icon={<Boxes className="size-4" />}
-            label="Actors"
-          />
-          <PanelButton
-            active={state.panel === 'sequence'}
-            onClick={() => send({ type: 'panel.select', panel: 'sequence' })}
-            icon={<ArrowDownWideNarrow className="size-4" />}
-            label="Sequence"
-          />
-          <PanelButton
-            active={state.panel === 'events'}
-            onClick={() => send({ type: 'panel.select', panel: 'events' })}
-            icon={<ListOrdered className="size-4" />}
-            label="Events"
-          />
-        </div>
-      </header>
+      <InspectHeader current="/inspect">
+        <PanelButton
+          active={panel === 'actors'}
+          onClick={() => setPanel('actors')}
+          icon={<Boxes className="size-4" />}
+          label="Actors"
+        />
+        <PanelButton
+          active={panel === 'sequence'}
+          onClick={() => setPanel('sequence')}
+          icon={<ArrowDownWideNarrow className="size-4" />}
+          label="Sequence"
+        />
+        <PanelButton
+          active={panel === 'events'}
+          onClick={() => setPanel('events')}
+          icon={<ListOrdered className="size-4" />}
+          label="Events"
+        />
+      </InspectHeader>
+
       <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px]">
-        <section
-          className={cn(
-            'min-h-0',
-            state.mainView === 'graph' ? 'overflow-hidden' : 'overflow-auto p-4',
-          )}
-        >
-          {!selectedActor.graph ? (
+        <section className="min-h-0 overflow-auto p-4">
+          {selectedActor.graph ? (
+            <MachineViz graph={selectedActor.graph} activeIds={activeIds} />
+          ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               No machine definition for {selectedActor.name}.
             </div>
-          ) : state.mainView === 'graph' ? (
-            <GraphPanel
-              layoutKey={selectedActor.sessionId}
-              graph={selectedActor.graph}
-              activeIds={activeIds}
-            />
-          ) : (
-            <MachineViz graph={selectedActor.graph} activeIds={activeIds} />
           )}
         </section>
         <aside className="min-h-0 border-l border-border">
-          {state.panel === 'actors' ? (
-            <ActorsPanel state={state} send={send} />
-          ) : state.panel === 'sequence' ? (
+          {panel === 'actors' ? (
+            <ActorsPanel state={state} />
+          ) : panel === 'sequence' ? (
             <SequencePanel events={state.events} />
           ) : (
             <EventsPanel events={state.events} />
@@ -287,43 +92,7 @@ function InspectRoute() {
   );
 }
 
-function PanelButton({
-  active,
-  icon,
-  label,
-  onClick,
-  testId,
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-  testId?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid={testId}
-      aria-pressed={active}
-      className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs hover:bg-muted',
-        active && 'bg-muted text-foreground',
-      )}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
-
-function ActorsPanel({
-  state,
-  send,
-}: {
-  state: InspectState;
-  send: React.Dispatch<InspectAction>;
-}) {
+function ActorsPanel({ state }: { state: InspectState }) {
   const tree = buildActorTree(Object.values(state.actors));
 
   return (
@@ -333,7 +102,6 @@ function ActorsPanel({
           key={actor.sessionId}
           actor={actor}
           selectedSessionId={state.selectedSessionId}
-          send={send}
         />
       ))}
     </div>
@@ -369,11 +137,9 @@ function buildActorTree(actors: ActorInfo[]): ActorTreeNode[] {
 function ActorTreeItem({
   actor,
   selectedSessionId,
-  send,
 }: {
   actor: ActorTreeNode;
   selectedSessionId: string | undefined;
-  send: React.Dispatch<InspectAction>;
 }) {
   const selected = actor.sessionId === selectedSessionId;
 
@@ -381,9 +147,7 @@ function ActorTreeItem({
     <>
       <button
         type="button"
-        onClick={() =>
-          send({ type: 'actor.select', sessionId: actor.sessionId })
-        }
+        onClick={() => selectActor(actor.sessionId)}
         style={{
           marginLeft: actor.depth * 16,
           width: `calc(100% - ${actor.depth * 16}px)`,
@@ -413,7 +177,6 @@ function ActorTreeItem({
           key={child.sessionId}
           actor={child}
           selectedSessionId={selectedSessionId}
-          send={send}
         />
       ))}
     </>
