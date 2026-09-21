@@ -1,0 +1,238 @@
+# High-performance node graph tab for `/inspect`
+
+Date: 2026-09-21
+Status: approved design, not yet implemented
+
+## Problem
+
+Sketch renders an XState machine as nested DOM divs: `MachineViz` → `StateNodeViz`
+(recursive) → `TransitionViz`. Layout is CSS flex-wrap. There are no drawn edges —
+transitions are inline text rows inside their source node. Nothing is memoized.
+
+In live inspect mode (`src/routes/inspect.tsx`) every `@xstate.snapshot` event
+re-renders the whole tree. For the target workload this is roughly 700 component
+renders per keystroke, plus two O(n) `graph.nodes.find` scans per edge in
+`getRelativeTarget` (`src/lib/machine.ts:265`) — about 118k array comparisons per
+full render.
+
+## Target workload
+
+`@wkda/conversational-carlead-new`'s conversation machine, measured from
+`final-initial-state-machine.js` (705 KB):
+
+| Property | Value |
+| --- | --- |
+| State nodes | 99 (1 parallel root, 22 compound, 75 atomic, 1 final) |
+| Transitions | 596 (440 resolvable to an in-graph target) |
+| Nesting depth | 3 |
+| Snapshot rate | one per user keystroke / transition |
+
+The flow is config-driven, so state count grows with field count.
+
+## Measurements
+
+Taken on the real machine with elkjs 0.12.0, `layered` + `ORTHOGONAL` +
+`hierarchyHandling: INCLUDE_CHILDREN`:
+
+| Measurement | Result |
+| --- | --- |
+| ELK layout time | 232–470 ms |
+| Laid-out world size | 3961 × 9111 px |
+| Edge geometry | 440 sections, 1864 bend points (~2.3k segments) |
+| elkjs worker bundle | 1.6 MB raw, ~400 KB gzipped |
+
+Two conclusions follow directly.
+
+**Layout is expensive and snapshot-independent.** 300 ms cannot run on the main
+thread, and must never re-run on a keystroke. Layout is a pure function of the
+machine *definition*, so it is computed once per actor in a Worker and cached.
+
+**Drawing is cheap; React is not.** 99 rects + 2.3k segments + ~540 labels is a
+few milliseconds on Canvas 2D, well below the ~5–10k element point where WebGL
+starts to win (Horak et al., "Comparing Rendering Performance of Common Web
+Technologies for Large Graphs"). The win comes from removing snapshots from the
+React path, not from the GPU.
+
+## Decisions
+
+| Decision | Choice | Why |
+| --- | --- | --- |
+| Placement | "Visualization" button, first in the `/inspect` header group, swaps the **main** pane | Sidebar is 360px; a 3961×9111 graph needs the main pane. Old DOM viz stays reachable. |
+| Scope | `/inspect` only | Editor route `/` keeps the nested-DOM renderer. |
+| Interactivity | Pan, zoom, fit, hover highlight, click-to-select, live active highlighting | No editing, no node dragging. |
+| Layout engine | elkjs `layered`, in a Worker | Only mainstream engine with compound/hierarchical layout + orthogonal routing with bend points. dagre is deprecated and does not nest; d3-dag does not nest. |
+| Render target | Canvas 2D, retained scene | Sufficient to ~5k elements; no SDF text, picking buffers or large dependency. Draw call can be swapped for WebGL later without touching layout, scene or interaction. |
+
+### Tab wiring
+
+The header button group becomes `[Visualization] [Actors] [Sequence] [Events]`.
+These are two independent controls rendered as one group, not four members of one
+union:
+
+- `InspectState.panel: 'actors' | 'sequence' | 'events'` is **unchanged** and keeps
+  driving the 360px sidebar.
+- A new `InspectState.mainView: 'dom' | 'graph'` drives the main pane, defaulting
+  to `'dom'` so current behaviour is preserved until the tab is clicked.
+
+Clicking Visualization toggles `mainView`; the sidebar keeps whichever panel was
+last selected and stays visible. The Visualization button renders as active when
+`mainView === 'graph'`, independently of which sidebar panel is active.
+
+## Architecture
+
+```
+MachineGraph ──▶ measure ──▶ to-elk ──▶ [Worker: elkjs] ──▶ from-elk ──▶ LayoutGraph
+                                                                             │
+                                                               buildScene ◀──┘
+                                                                     │
+                                               Scene + spatial index │
+                                                                     ▼
+                                     camera ──▶ renderer ──▶ <canvas>
+                                         ▲          ▲
+                                    interaction   activeIds
+```
+
+### Units
+
+Each has one purpose, a small interface, and is testable in isolation.
+
+| Unit | File | Responsibility | Depends on |
+| --- | --- | --- | --- |
+| Measure | `src/lib/layout/measure.ts` | `StateNodeData → {width, height}` using a cached `measureText`. Pure, no DOM mutation. | — |
+| To-ELK | `src/lib/layout/to-elk.ts` | `MachineGraph → ElkNode` tree. Nests children, hoists each edge into its endpoints' lowest common ancestor container, drops dangling edges, attaches per-node layout options. | `@statelyai/graph` queries |
+| Worker | `src/lib/layout/layout.worker.ts` | Lazy-imports elkjs, runs `elk.layout`, posts the result back. | elkjs |
+| Layout client | `src/lib/layout/client.ts` | Spawns the worker, tags requests with an id, drops stale results, caches by actor `sessionId`, falls back to main-thread layout on worker failure. | worker |
+| From-ELK | `src/lib/layout/from-elk.ts` | ELK result → `LayoutGraph` with **absolute** coordinates. ELK emits child node coords and edge section coords relative to their container; this unit accumulates them. Highest-risk logic in the change. | — |
+| Scene | `src/lib/canvas/scene.ts` | Draw-ready flat arrays plus a uniform spatial grid (~256px cells) indexing nodes and edge segments for hit-testing. | — |
+| Camera | `src/lib/canvas/camera.ts` | Pan, zoom about a point, fit-to-bounds, screen↔world transforms. | — |
+| Renderer | `src/lib/canvas/renderer.ts` | `draw(ctx, scene, camera, ui)`. Viewport culling, zoom LOD, device-pixel-ratio handling. | scene, camera |
+| Interaction | `src/lib/canvas/interaction.ts` | Pointer and wheel events → camera updates and hit-test results. | scene, camera |
+| Canvas component | `src/components/GraphCanvas.tsx` | Owns the `<canvas>` ref, mounts the renderer, exposes an imperative handle (`setActive`, `fit`, `zoomTo`). Renders once. | renderer, interaction |
+| Panel component | `src/components/GraphPanel.tsx` | Wires `/inspect` state to `GraphCanvas`. Loading, empty and error states. Toolbar: fit, zoom in/out, reset. | GraphCanvas, layout client |
+
+### Why not `@statelyai/graph/elk`
+
+The package ships an ELK converter, but `toELK` sets no node sizes and no layout
+options, and `fromELK` discards node `data` and every edge `section`
+(`dist/formats/elk/index.mjs:96-118`) — precisely the bend points the renderer
+needs. We use its graph queries (`getChildren`, `getOutEdges`, `getRoots`) and
+write our own conversion.
+
+## Update strategy
+
+Two paths at very different frequencies.
+
+**Definition change** — on `@xstate.actor`, rare:
+
+```
+measure → to-elk → worker layout (~300ms, off main thread) → from-elk → buildScene
+```
+
+Cached by actor `sessionId`. Stale responses dropped by request id.
+
+**Snapshot** — on `@xstate.snapshot`, every keystroke:
+
+```
+getActiveIds(snapshot) → handle.setActive(ids) → mark dirty → one rAF → draw
+```
+
+No layout, no scene rebuild, no React subtree. `GraphPanel` is a single component
+that re-renders per snapshot and pushes ids through a ref in a `useEffect`; one
+cheap component render replaces today's ~700. Redraws are rAF-coalesced, so a
+burst of snapshots within one frame costs one draw.
+
+`getActiveIds` in `src/routes/inspect.tsx` keeps its current behaviour: inspection
+events carry a serialized snapshot (`status`/`value`/`context`) with no `_nodes`,
+so active ids are derived from `snapshot.value` plus the machine root id.
+
+## What is drawn
+
+Information parity with the Stately visualizer:
+
+- Compound and parallel states as containers with children nested inside
+  (ELK `hierarchyHandling: INCLUDE_CHILDREN`).
+- Node header: state key plus the existing type affordances — initial arrow,
+  parallel bars, final double border, history `H` / `H*`, choice diamond.
+- Node body rows: description, invoke, entry, exit.
+- Edges: orthogonal polylines with arrowheads, labelled with `displayEvent` and
+  guard, positioned at ELK's computed label position.
+- Self-transitions and targetless transitions: loop glyph on the node.
+- Active states: the existing `primary` colour token, read from CSS custom
+  properties so dark mode continues to work.
+
+### Zoom level-of-detail
+
+| Zoom scale | Drawn |
+| --- | --- |
+| `< 0.35` | Node rects and edge lines only |
+| `0.35 – 0.7` | Plus node key labels |
+| `≥ 0.7` | Plus body rows, edge labels, arrowheads |
+
+With viewport culling on a 3961×9111 world, a typical frame draws a few dozen
+nodes rather than 99.
+
+## Error handling
+
+| Condition | Behaviour |
+| --- | --- |
+| Worker cannot spawn, or elkjs fails to load | Fall back to main-thread layout; log once. Never a blank pane. |
+| Actor switched while a layout is in flight | Request ids; late results discarded. |
+| Edge referencing a non-existent node | `to-elk` drops it and reports the count as a subtle badge. ELK throws on these — observed with `Referenced shape does not exist: #conversation.dialog.editRouter`. |
+| No machine definition | Existing empty state. |
+| No 2D canvas context | Message in the pane; the DOM viz stays reachable via the tab. |
+
+## Event buffer cap
+
+The `/inspect` reducer appends every inspection event to an unbounded
+`state.events` array, and the Events and Sequence sidebars render all of them. At
+keystroke-rate snapshots this grows without limit and re-renders the full list
+each time, bottlenecking the session regardless of canvas speed.
+
+`inspectReducer` keeps the most recent **500** events in a ring buffer; older
+events drop. This is an observable behaviour change: the Events panel no longer
+shows unbounded history.
+
+Virtualizing the sidebar lists is **not** included, and remains a known
+bottleneck if 500 rows proves too slow to re-render.
+
+## Testing
+
+### Vitest — pure, no DOM
+
+| Target | Assertions |
+| --- | --- |
+| `from-elk` | Relative→absolute accumulation for nested children and for edge sections. Highest-value tests in the change. |
+| `to-elk` | Hierarchy preserved; edges hoisted to the LCA container; self-edges handled; dangling edges dropped and counted. |
+| `camera` | screen↔world round-trip; fit-to-bounds; zoom about a point. |
+| `scene` | Hit-test returns the deepest node under a point; returns an edge within tolerance. |
+| `measure` | Deterministic size as a function of content. |
+
+Fixtures: the existing `trafficLight` default machine, plus a synthetically
+generated large graph for a perf smoke test with a generous budget.
+
+### Playwright — `e2e/inspect-graph.spec.ts`
+
+`createBrowserReceiver` is a plain `window` `message` listener
+(`@statelyai/inspect/dist/index.mjs:237`), so the route can be driven from the
+test with `page.evaluate(() => window.postMessage({ type: '@xstate.actor', ... }))`.
+The spec asserts the Visualization tab switches the main pane, the canvas mounts,
+and active-state highlighting updates when a synthetic snapshot arrives.
+
+### Regression safety
+
+All 8 existing e2e specs exercise `/`, which this change does not touch. The hooks
+`machine-root`, `machine-name`, `root-transitions` and `data-sim-active` are
+unchanged. The canvas gets its own `data-testid="graph-canvas"`.
+
+## Out of scope
+
+- Editor route `/` — keeps the nested-DOM renderer.
+- Node dragging and graph editing.
+- WebGL rendering.
+- Persisting camera position across reloads.
+- Virtualizing the Events and Sequence sidebar lists.
+
+## Constraint
+
+This is a local clone of someone else's OSS repo. Changes stay local. No upstream
+PR — their README asks for issues, not AI-generated PRs.
