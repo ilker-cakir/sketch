@@ -4,6 +4,7 @@ import {
   EDGE_ICON_WIDTH,
   EDGE_LABEL_PAD_X,
   FONT_BODY,
+  FONT_DESCRIPTION,
   FONT_HEADER,
   FONT_LABEL,
   FONT_ROW_KEY,
@@ -36,6 +37,14 @@ export interface RenderState {
   hoveredNodeId: string | null;
   hoveredEdgeId: string | null;
   selectedNodeId: string | null;
+  /**
+   * 0–1 activation fade per node, so a state change eases in over 150ms the
+   * way `transition-... duration-150` does in the DOM renderer. Defaults to a
+   * hard 0/1 from `activeIds` when no tracker is supplied.
+   */
+  activation?: (nodeId: string) => number;
+  /** 0–1 progress of an `after` transition's timer, or null to draw no bar. */
+  timerProgress?: (edgeId: string) => number | null;
 }
 
 export const emptyRenderState: RenderState = {
@@ -44,6 +53,9 @@ export const emptyRenderState: RenderState = {
   hoveredEdgeId: null,
   selectedNodeId: null,
 };
+
+const activationOf = (state: RenderState, nodeId: string): number =>
+  state.activation?.(nodeId) ?? (state.activeIds.has(nodeId) ? 1 : 0);
 
 function roundedRect(
   ctx: CanvasRenderingContext2D,
@@ -79,13 +91,13 @@ function drawGrid(
   viewport: Rect,
   scale: number,
 ): void {
-  if (scale < 0.5) return;
+  if (scale < 0.6) return;
   const step = GRID_SPACING;
   const startX = Math.floor(viewport.x / step) * step;
   const startY = Math.floor(viewport.y / step) * step;
   const radius = 1 / scale;
 
-  ctx.globalAlpha = 0.18;
+  ctx.globalAlpha = 0.07;
   ctx.fillStyle = theme.mutedForeground;
   ctx.beginPath();
   for (let x = startX; x < viewport.x + viewport.width; x += step) {
@@ -194,21 +206,14 @@ function drawNode(
   state: RenderState,
   scale: number,
 ): void {
-  const isActive = state.activeIds.has(node.id);
+  const activation = activationOf(state, node.id);
   const isHovered = state.hoveredNodeId === node.id;
   const isSelected = state.selectedNodeId === node.id;
   // An active leaf is the state the machine is *in*; an active container is
   // merely an ancestor of it, so it gets a lighter treatment.
-  const isActiveLeaf = isActive && !node.isContainer;
+  const leafActivation = node.isContainer ? 0 : activation;
 
-  // Drop shadow on cards only, and only when zoomed in enough to notice it.
-  const wantShadow = !node.isContainer && scale >= LOD_LABELS;
-  if (wantShadow) {
-    ctx.shadowColor = 'rgba(0,0,0,0.13)';
-    ctx.shadowBlur = 5 / scale;
-    ctx.shadowOffsetY = 1 / scale;
-  }
-
+  // Body. Flat, like the DOM renderer's cards — no drop shadow.
   if (node.isContainer) {
     // Deeper containers sit slightly lighter so nesting reads at a glance.
     ctx.globalAlpha = 0.03 + Math.min(node.depth, 3) * 0.012;
@@ -219,33 +224,52 @@ function drawNode(
   }
   roundedRect(ctx, node.x, node.y, node.width, node.height, NODE_RADIUS);
   ctx.fill();
-
-  ctx.shadowColor = 'transparent';
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetY = 0;
   ctx.globalAlpha = 1;
 
-  if (isActiveLeaf) {
-    ctx.globalAlpha = 0.13;
+  if (leafActivation > 0) {
+    // `bg-primary/10`, faded in with the activation.
+    ctx.globalAlpha = 0.1 * leafActivation;
     ctx.fillStyle = theme.primary;
     ctx.fill();
     ctx.globalAlpha = 1;
   }
 
   // Border. The DOM renderer uses a 2px border, so match its weight.
-  const emphasised = isActiveLeaf || isSelected;
-  ctx.strokeStyle =
-    isActive || isSelected || isHovered ? theme.primary : theme.border;
-  ctx.globalAlpha = isActive && !isActiveLeaf ? 0.55 : 1;
+  const emphasised = leafActivation > 0.5 || isSelected;
+  const primaryBorder = activation > 0 || isSelected || isHovered;
+  ctx.strokeStyle = primaryBorder ? theme.primary : theme.border;
+  ctx.globalAlpha =
+    activation > 0 && leafActivation === 0
+      ? 0.25 + 0.3 * activation // active ancestor: present but subdued
+      : primaryBorder && !isSelected && !isHovered
+        ? Math.max(0.25, activation)
+        : 1;
   ctx.lineWidth = (emphasised ? 2.25 : 1.75) / scale;
   if (node.isRegion) ctx.setLineDash([6 / scale, 4 / scale]);
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.globalAlpha = 1;
 
+  // `shadow-[0_0_0_1px_var(--color-primary)]` — the DOM's highlight ring.
+  if (isHovered || isSelected) {
+    ctx.strokeStyle = theme.primary;
+    ctx.globalAlpha = 0.45;
+    ctx.lineWidth = 1 / scale;
+    roundedRect(
+      ctx,
+      node.x - 2 / scale,
+      node.y - 2 / scale,
+      node.width + 4 / scale,
+      node.height + 4 / scale,
+      NODE_RADIUS + 2 / scale,
+    );
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
   // Final states get the statechart double border.
   if (node.data.type === 'final') {
-    ctx.strokeStyle = isActive || isSelected ? theme.primary : theme.border;
+    ctx.strokeStyle = primaryBorder ? theme.primary : theme.border;
     ctx.lineWidth = 1.5 / scale;
     roundedRect(
       ctx,
@@ -262,11 +286,11 @@ function drawNode(
 
   // Header
   const textY = node.y + HEADER_HEIGHT / 2 + 1;
-  drawNodeGlyph(ctx, theme, node, node.x + NODE_PAD_X, textY, isActive);
+  drawNodeGlyph(ctx, theme, node, node.x + NODE_PAD_X, textY, activation > 0.5);
 
   ctx.font = FONT_HEADER;
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = isActive ? theme.primary : theme.foreground;
+  ctx.fillStyle = activation > 0.5 ? theme.primary : theme.foreground;
   ctx.fillText(node.headerText, node.x + NODE_PAD_X + GLYPH_OFFSET, textY);
 
   if (scale < LOD_DETAIL || node.rows.length === 0) return;
@@ -284,7 +308,7 @@ function drawNode(
     const rowRight = node.x + node.width;
 
     if (row.kind === 'description') {
-      ctx.font = FONT_BODY;
+      ctx.font = FONT_DESCRIPTION;
       ctx.fillStyle = theme.mutedForeground;
       ctx.fillText(row.text, node.x + NODE_PAD_X, centreY);
     } else if (row.kind === 'invoke') {
@@ -352,7 +376,6 @@ function drawNode(
   }
 }
 
-
 function drawArrowhead(
   ctx: CanvasRenderingContext2D,
   from: Point,
@@ -384,7 +407,7 @@ function edgeEmphasis(
 ): EdgeEmphasis {
   if (state.hoveredEdgeId === edge.id) return 'strong';
   if (hoveredOutEdges) return hoveredOutEdges.has(edge.id) ? 'strong' : 'dim';
-  if (state.activeIds.has(edge.sourceId)) return 'strong';
+  if (activationOf(state, edge.sourceId) > 0.5) return 'strong';
   return 'normal';
 }
 
@@ -474,23 +497,34 @@ function drawEdgeLabel(
   theme: CanvasTheme,
   edge: LayoutEdge,
   emphasis: EdgeEmphasis,
+  progress: number | null,
 ): void {
   const label = edge.label;
   if (!label || emphasis === 'dim') return;
 
   const strong = emphasis === 'strong';
 
-  // Pill background, so labels stay readable where routes pass behind them.
-  ctx.globalAlpha = 0.96;
-  ctx.fillStyle = theme.card;
-  roundedRect(ctx, label.x, label.y, label.width, label.height, 4);
+  // A knockout behind the text, not a bordered pill: the DOM renderer shows
+  // transitions as plain type on the page background.
+  ctx.globalAlpha = 0.94;
+  ctx.fillStyle = theme.background;
+  roundedRect(ctx, label.x, label.y, label.width, label.height, 3);
   ctx.fill();
   ctx.globalAlpha = 1;
-  ctx.strokeStyle = strong ? theme.primary : theme.border;
-  ctx.globalAlpha = strong ? 0.8 : 0.7;
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.globalAlpha = 1;
+
+  // The simulation's timer bar: a primary fill sweeping across the label as
+  // the `after` delay elapses.
+  if (progress !== null) {
+    ctx.save();
+    ctx.beginPath();
+    roundedRect(ctx, label.x, label.y, label.width, label.height, 3);
+    ctx.clip();
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = theme.primary;
+    ctx.fillRect(label.x, label.y, label.width * progress, label.height);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
 
   let x = label.x + EDGE_LABEL_PAD_X;
   const centreY = label.y + label.height / 2;
@@ -571,14 +605,10 @@ function drawSelfLoop(
   const boxX = cx - boxWidth / 2;
   const boxY = cy - r - 21;
 
-  ctx.globalAlpha = 0.96;
-  ctx.fillStyle = theme.card;
-  roundedRect(ctx, boxX, boxY, boxWidth, 18, 4);
+  ctx.globalAlpha = 0.94;
+  ctx.fillStyle = theme.background;
+  roundedRect(ctx, boxX, boxY, boxWidth, 18, 3);
   ctx.fill();
-  ctx.globalAlpha = active ? 0.8 : 0.7;
-  ctx.strokeStyle = active ? theme.primary : theme.border;
-  ctx.lineWidth = 1;
-  ctx.stroke();
   ctx.globalAlpha = 1;
 
   ctx.fillStyle = active ? theme.primary : theme.mutedForeground;
@@ -681,12 +711,18 @@ export function draw(options: DrawOptions): DrawStats {
   for (const [nodeId, label] of scene.selfLoopLabels) {
     const node = scene.nodeById.get(nodeId);
     if (!node || !rectsIntersect(viewport, node)) continue;
-    drawSelfLoop(ctx, theme, node, label, state.activeIds.has(nodeId), scale);
+    drawSelfLoop(ctx, theme, node, label, activationOf(state, nodeId) > 0.5, scale);
   }
 
   if (scale >= LOD_DETAIL) {
     for (const { edge, emphasis } of visible) {
-      drawEdgeLabel(ctx, theme, edge, emphasis);
+      drawEdgeLabel(
+        ctx,
+        theme,
+        edge,
+        emphasis,
+        state.timerProgress?.(edge.id) ?? null,
+      );
     }
   }
 

@@ -1,6 +1,6 @@
 import type { LayoutEdge, LayoutGraph, LayoutNode, Point, Rect } from '@/lib/layout/types';
 import {
-  FONT_BODY,
+  FONT_DESCRIPTION,
   FONT_HEADER,
   FONT_LABEL,
   NODE_PAD_X,
@@ -10,7 +10,7 @@ import {
   type MeasureText,
   type NodeRow,
 } from '@/lib/layout/measure';
-import { getEventCategory } from '@/lib/machine';
+import { getAfterDelayMs, getEventCategory } from '@/lib/machine';
 
 /** A node with its text pre-fitted to the box, so drawing does no measuring. */
 export interface SceneNode extends LayoutNode {
@@ -27,6 +27,7 @@ export interface Scene {
   nodes: SceneNode[];
   edges: LayoutEdge[];
   nodeById: Map<string, SceneNode>;
+  edgeById: Map<string, LayoutEdge>;
   /** Reverse-depth order: deepest first, for topmost-wins hit-testing. */
   hitOrder: SceneNode[];
   bounds: Rect;
@@ -44,6 +45,12 @@ export interface Scene {
    * overdraw each other into an unreadable circle.
    */
   selfLoopLabels: Map<string, string>;
+  /**
+   * Edge id → `after` delay in milliseconds, for edges whose delay is a
+   * literal. Named delays are absent, since their duration is not in the
+   * event type.
+   */
+  edgeDelayMs: Map<string, number>;
 }
 
 const CELL_SIZE = 256;
@@ -83,7 +90,10 @@ function rowsFitToWidth(
   const budget = width - NODE_PAD_X * 2;
   return rows.map((row) =>
     row.kind === 'description'
-      ? { kind: 'description', text: truncateToWidth(row.text, FONT_BODY, budget, measureText) }
+      ? {
+          kind: 'description',
+          text: truncateToWidth(row.text, FONT_DESCRIPTION, budget, measureText),
+        }
       : row,
   );
 }
@@ -154,6 +164,12 @@ export function buildScene(
     );
   }
 
+  const edgeDelayMs = new Map<string, number>();
+  for (const edge of layout.edges) {
+    const delay = getAfterDelayMs(edge.data.eventType);
+    if (delay !== null) edgeDelayMs.set(edge.id, delay);
+  }
+
   const edgeGrid = new Map<string, number[]>();
   layout.edges.forEach((edge, index) => {
     for (let i = 1; i < edge.points.length; i++) {
@@ -165,6 +181,7 @@ export function buildScene(
     nodes,
     edges: layout.edges,
     nodeById: new Map(nodes.map((n) => [n.id, n])),
+    edgeById: new Map(layout.edges.map((e) => [e.id, e])),
     hitOrder: [...nodes].sort((a, b) => b.depth - a.depth),
     bounds: { x: 0, y: 0, width: layout.width, height: layout.height },
     droppedEdgeCount: layout.droppedEdgeCount,
@@ -172,6 +189,7 @@ export function buildScene(
     cellSize: CELL_SIZE,
     outEdgeIds,
     selfLoopLabels,
+    edgeDelayMs,
   };
 }
 

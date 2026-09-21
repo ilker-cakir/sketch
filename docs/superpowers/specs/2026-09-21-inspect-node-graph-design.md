@@ -199,26 +199,58 @@ Information parity with the Stately visualizer:
   properties so dark mode continues to work.
 
 The canvas deliberately mirrors the DOM renderer's visual language rather than
-inventing its own:
+inventing its own. Sketch's simulation view is flat and restrained — no
+shadows, monochrome with `primary` reserved for active states and targets — and
+the canvas follows it.
 
 | Element | Treatment |
 | --- | --- |
-| Node card | 1.75px border, rounded, drop shadow, `card` fill — `border-2` in the DOM |
+| Node card | Flat, 1.75px border, rounded, `card` fill — `border-2` in the DOM, no shadow |
 | Container | Translucent `foreground` wash that lightens with depth |
 | Parallel region | Dashed border |
 | Final state | Concentric inner ring (the DOM's `border-double`) |
 | Initial state | Filled dot and stub |
 | Choice state | Rotated square, detected the same way `StateNodeViz` does |
 | History state | Boxed `H` / `H*` |
-| Active leaf | Primary border and 13% primary fill |
+| Active leaf | Primary border and 10% primary fill (`bg-primary/10`) |
 | Active ancestor | Primary border at reduced opacity — it is only on the path |
+| Hover / selected | 1px outer ring (`shadow-[0_0_0_1px_var(--color-primary)]`) |
 | Entry / exit | Two clipped columns with a divider |
-| Transition label | Bordered pill with a category glyph, event name, and guard in primary |
+| Transition label | Background knockout, category glyph, event name, guard in primary |
 | Self / targetless | One open arc per node, clear of the border, labelled with its events |
-| Background | Faint dot grid, so panning empty space still reads as movement |
+| Background | Very faint dot grid above 0.6 zoom — the one concession the DOM does not need, since panning empty space otherwise gives no feedback |
+
+Type follows the app: Figtree for headings and row keys, mono for event names
+and action chips, sans-italic for descriptions. The header is 16px rather than
+the DOM's `text-lg`, because node width drives total layout size and 18px
+widens every node.
 
 Hovering a node draws its outgoing transitions at full strength and fades the
 rest, the canvas equivalent of the DOM renderer's hover highlighting.
+
+### Motion
+
+`src/lib/canvas/animation.ts` holds the time-dependent maths, free of canvas and
+DOM so it can be tested by passing `now`.
+
+| Motion | Behaviour |
+| --- | --- |
+| Activation | Nodes fade between inactive and active over 150ms ease-out, matching the DOM's `transition-... duration-150`. The first active set after connecting appears already on, since it is not a transition we saw. |
+| Camera | Fit and zoom ease over 250ms. Scale interpolates geometrically; linear interpolation of a 0.1→1 zoom reads as a jump then a crawl. A drag or wheel cancels an in-flight tween. |
+| `after` timers | A primary fill sweeps across the transition label, mirroring the simulation's progress bar. |
+
+The timer bar is **inferred, not observed**. The delay comes from the event type
+(`xstate.after(5000)`), and elapsed time is measured from when the canvas saw
+the source state become active. A state that was already active when the
+session connected reports no start time and draws no bar, rather than a
+confidently wrong one. Named delays (`xstate.after(TIMEOUT)`) resolve to no
+duration and likewise draw no bar.
+
+Animation keeps `requestAnimationFrame` running only while something is moving:
+a fade in flight, a camera tween, or a visible timer. Timer bars are drawn only
+at detail zoom, so the check is gated on zoom too — otherwise the loop would
+burn frames animating progress nobody can see. Idle returns to redrawing on
+input alone.
 
 ### Zoom level-of-detail
 
@@ -264,6 +296,7 @@ bottleneck if 500 rows proves too slow to re-render.
 | `from-elk` | Relative→absolute accumulation for nested children and for edge sections. Highest-value tests in the change. |
 | `to-elk` | Hierarchy preserved; edges hoisted to the LCA container; self-edges handled; dangling edges dropped and counted. |
 | `camera` | screen↔world round-trip; fit-to-bounds; zoom about a point. |
+| `animation` | easing bounds and monotonicity, activation fade in/out and mid-fade reversal, idle detection, timer progress and clamping, `getAfterDelayMs` parsing. |
 | `scene` | Hit-test returns the deepest node under a point; returns an edge within tolerance. |
 | `measure` | Deterministic size as a function of content. |
 

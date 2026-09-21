@@ -6,7 +6,14 @@ import {
   zoomBy as zoomCameraBy,
   type Camera,
 } from './camera';
-import { draw, emptyRenderState, type RenderState } from './renderer';
+import { draw, emptyRenderState, LOD_DETAIL, type RenderState } from './renderer';
+import {
+  CAMERA_MS,
+  createActivationTracker,
+  timerProgress,
+  tweenCamera,
+  type CameraTween,
+} from './animation';
 import { hitTestEdge, hitTestNode, type Scene, type SceneNode } from './scene';
 import { readCanvasTheme, type CanvasTheme } from './theme';
 
@@ -58,11 +65,52 @@ export function createGraphController(
   /** Set once per scene, so a newly loaded graph starts framed. */
   let needsInitialFit = false;
 
+  const activation = createActivationTracker();
+  let cameraTween: CameraTween | null = null;
+
+  /** Live `after` timers for currently active sources, keyed by edge id. */
+  function edgeTimerProgress(edgeId: string, now: number): number | null {
+    const delay = scene?.edgeDelayMs.get(edgeId);
+    const edge = scene?.edgeById.get(edgeId);
+    if (delay === undefined || !edge) return null;
+    return timerProgress(delay, activation.activeSince(edge.sourceId), now);
+  }
+
+  /**
+   * True while any `after` timer on an active state is still counting down.
+   *
+   * Gated on zoom: timer bars are only drawn at detail zoom, so below it
+   * there is nothing to animate and the render loop must be allowed to idle
+   * rather than burning frames on invisible progress.
+   *
+   * Runs every frame, so it stays linear in the number of timed edges.
+   */
+  function hasRunningTimer(now: number): boolean {
+    if (!scene || camera.scale < LOD_DETAIL) return false;
+    for (const [edgeId, delay] of scene.edgeDelayMs) {
+      const edge = scene.edgeById.get(edgeId);
+      if (!edge) continue;
+      const since = activation.activeSince(edge.sourceId);
+      if (since !== null && now - since < delay) return true;
+    }
+    return false;
+  }
+
   function markDirty(): void {
     if (destroyed || frame !== 0) return;
     frame = requestAnimationFrame(() => {
       frame = 0;
       render();
+      // Keep the loop awake only while something is actually moving; when
+      // nothing is, the canvas goes back to redrawing on input alone.
+      const now = performance.now();
+      if (
+        cameraTween !== null ||
+        activation.isAnimating(now) ||
+        hasRunningTimer(now)
+      ) {
+        markDirty();
+      }
     });
   }
 
@@ -74,14 +122,27 @@ export function createGraphController(
     }
     if (needsInitialFit) {
       needsInitialFit = false;
+      cameraTween = null;
       camera = fitToBounds(scene.bounds, width, height);
     }
+
+    const now = performance.now();
+    if (cameraTween) {
+      const stepped = tweenCamera(cameraTween, now);
+      camera = stepped.camera;
+      if (stepped.done) cameraTween = null;
+    }
+
     draw({
       ctx,
       scene,
       camera,
       theme,
-      state,
+      state: {
+        ...state,
+        activation: (nodeId) => activation.amount(nodeId, now),
+        timerProgress: (edgeId) => edgeTimerProgress(edgeId, now),
+      },
       width,
       height,
       devicePixelRatio: window.devicePixelRatio || 1,
@@ -154,6 +215,7 @@ export function createGraphController(
     if (!dragMoved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     dragMoved = true;
     lastPointer = position;
+    cameraTween = null;
     camera = pan(camera, dx, dy);
     markDirty();
   }
@@ -185,6 +247,7 @@ export function createGraphController(
 
   function onWheel(event: WheelEvent): void {
     event.preventDefault();
+    cameraTween = null;
     // Pinch-zoom arrives as a wheel event with ctrlKey set; plain wheel pans.
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY / 200);
@@ -204,17 +267,31 @@ export function createGraphController(
   canvas.style.cursor = 'grab';
   canvas.style.touchAction = 'none';
 
+  /** Eases to `to` rather than jumping, so the viewport stays followable. */
+  function startTween(to: Camera): void {
+    cameraTween = {
+      from: camera,
+      to,
+      startedAt: performance.now(),
+      durationMs: CAMERA_MS,
+    };
+    markDirty();
+  }
+
   // ---- public API --------------------------------------------------------
 
   return {
     setScene(next) {
       scene = next;
+      activation.reset();
+      cameraTween = null;
       needsInitialFit = next !== null;
       state = { ...state, hoveredNodeId: null, hoveredEdgeId: null, selectedNodeId: null };
       markDirty();
     },
     setActiveIds(ids) {
       state = { ...state, activeIds: ids };
+      activation.setActive(ids, performance.now());
       markDirty();
     },
     setSelected(nodeId) {
@@ -228,12 +305,10 @@ export function createGraphController(
     },
     fit() {
       if (!scene) return;
-      camera = fitToBounds(scene.bounds, width, height);
-      markDirty();
+      startTween(fitToBounds(scene.bounds, width, height));
     },
     zoomBy(factor) {
-      camera = zoomCameraBy(camera, factor, { x: width / 2, y: height / 2 });
-      markDirty();
+      startTween(zoomCameraBy(camera, factor, { x: width / 2, y: height / 2 }));
     },
     centerOn(nodeId) {
       const node = scene?.nodeById.get(nodeId);

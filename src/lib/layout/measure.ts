@@ -4,10 +4,22 @@ import { getEventCategory } from '@/lib/machine';
 /** Measures the advance width of `text` at the given CSS font shorthand. */
 export type MeasureText = (text: string, font: string) => number;
 
-export const FONT_HEADER = '600 15px Figtree, system-ui, sans-serif';
-export const FONT_BODY = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
-export const FONT_LABEL = '600 11px ui-monospace, SFMono-Regular, Menlo, monospace';
-export const FONT_ROW_KEY = '600 9px Figtree, system-ui, sans-serif';
+/**
+ * Type matched to the DOM renderer, which is the rest of Sketch: Figtree for
+ * headings and row keys, mono for event names and action chips, sans-italic
+ * for descriptions.
+ */
+const SANS = "'Figtree Variable', Figtree, system-ui, sans-serif";
+const MONO = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+
+export const FONT_HEADER = `600 16px ${SANS}`;
+/** Action chips and event names — `font-mono text-[0.6875rem]` in the DOM. */
+export const FONT_BODY = `11px ${MONO}`;
+/** State descriptions — `text-xs italic text-muted-foreground` in the DOM. */
+export const FONT_DESCRIPTION = `italic 12px ${SANS}`;
+export const FONT_LABEL = `600 11px ${MONO}`;
+/** `text-[0.625rem] font-semibold uppercase tracking-wider` in the DOM. */
+export const FONT_ROW_KEY = `600 10px ${SANS}`;
 
 export const NODE_MIN_WIDTH = 140;
 export const NODE_MAX_WIDTH = 320;
@@ -83,7 +95,7 @@ function chipRowWidth(
 function rowWidth(row: NodeRow, measureText: MeasureText): number {
   switch (row.kind) {
     case 'description':
-      return measureText(row.text, FONT_BODY);
+      return measureText(row.text, FONT_DESCRIPTION);
     case 'invoke':
       return chipRowWidth('INVOKE', row.items, measureText);
     case 'actions': {

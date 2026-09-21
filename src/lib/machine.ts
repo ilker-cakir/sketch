@@ -58,6 +58,23 @@ function displayEventType(eventType: string): string {
   return eventType;
 }
 
+/**
+ * The delay of an `after` transition in milliseconds, or null.
+ *
+ * Returns null for named delays (`xstate.after(TIMEOUT).x`), whose duration
+ * lives in the machine's `delays` implementation rather than the event type,
+ * so no progress can be derived from the event alone.
+ */
+export function getAfterDelayMs(eventType: string): number | null {
+  if (!eventType) return null;
+  const match =
+    eventType.match(/^xstate\.after\((\d+)\)\./) ??
+    eventType.match(/^xstate\.after\.(\d+)\./);
+  if (!match) return null;
+  const ms = Number(match[1]);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 /** Categorize event type for icon display */
 export function getEventCategory(
   eventType: string,

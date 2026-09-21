@@ -21,6 +21,8 @@ const MACHINE_CONFIG = {
         details: { on: { SUBMIT: { target: 'processing' } } },
         processing: {
           invoke: { src: 'chargeCard' },
+          // A literal delay, so the canvas can derive timer progress from it.
+          after: { 4000: { target: 'details' } },
           on: { OK: { target: '#checkout.done' }, FAIL: { target: 'details' } },
         },
       },
@@ -140,6 +142,36 @@ test.describe('/visualize', () => {
     await expect
       .poll(async () => (await probeCanvas(page)).signature, { timeout: 5000 })
       .not.toBe(before.signature);
+  });
+
+  test('animates an after-timer with no further snapshots', async ({ page }) => {
+    await waitForPaint(page);
+
+    // Timer bars only draw at detail zoom, so get above that threshold first
+    // and let the zoom tween settle.
+    for (let i = 0; i < 3; i++) {
+      await page.getByRole('button', { name: 'Zoom in' }).click();
+    }
+    await page.waitForTimeout(900);
+
+    // Entering `processing` starts its 4000ms timer.
+    await sendSnapshot(page, { payment: 'processing' });
+    await page.waitForTimeout(400);
+
+    const first = (await probeCanvas(page)).signature;
+    // Nothing else is sent: any further change must come from the timer bar
+    // sweeping, i.e. the render loop is genuinely running.
+    await page.waitForTimeout(900);
+    const second = (await probeCanvas(page)).signature;
+    expect(second).not.toBe(first);
+  });
+
+  test('settles to a stable frame once nothing is animating', async ({ page }) => {
+    await waitForPaint(page);
+    // No timers are running in `cart`, so repeated probes must match.
+    const first = (await probeCanvas(page)).signature;
+    await page.waitForTimeout(700);
+    expect((await probeCanvas(page)).signature).toBe(first);
   });
 
   test('selects a node on click', async ({ page }) => {

@@ -93,7 +93,7 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
       />
 
       <div className="pointer-events-none absolute inset-x-3 top-3 flex items-start justify-between gap-2">
-        <div className="pointer-events-auto flex items-center gap-1 rounded-md border border-border bg-card/90 p-1 backdrop-blur">
+        <div className="pointer-events-auto flex items-center gap-0.5 rounded-md border border-border bg-card/95 p-1">
           <ToolbarButton label="Fit to view" onClick={() => canvasRef.current?.fit()}>
             <Crosshair className="size-4" />
           </ToolbarButton>
@@ -103,7 +103,7 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
           <ToolbarButton label="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.25)}>
             <Plus className="size-4" />
           </ToolbarButton>
-          <span className="px-1.5 text-[0.6875rem] text-muted-foreground">
+          <span className="border-l border-border px-2 text-[0.6875rem] text-muted-foreground">
             {scene.nodes.length} states · {scene.edges.length} transitions
           </span>
         </div>
@@ -112,7 +112,7 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
           <div
             data-testid="graph-dropped-edges"
             title="These transitions target a state that is not part of this machine."
-            className="pointer-events-auto rounded-md border border-border bg-card/90 px-2 py-1 text-[0.6875rem] text-muted-foreground backdrop-blur"
+            className="pointer-events-auto rounded-md border border-border bg-card/95 px-2 py-1 text-[0.6875rem] text-muted-foreground"
           >
             {scene.droppedEdgeCount} unresolved{' '}
             {scene.droppedEdgeCount === 1 ? 'transition' : 'transitions'}
@@ -123,17 +123,26 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
       {selected && (
         <div
           data-testid="graph-selection"
-          className="pointer-events-none absolute bottom-3 left-3 max-w-sm rounded-md border border-border bg-card/95 px-3 py-2 text-xs backdrop-blur"
+          className="pointer-events-none absolute bottom-3 left-3 max-w-sm rounded-md border border-border bg-card p-3 text-xs"
         >
-          <div className="font-mono font-semibold">{selected.id}</div>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <h4 className="text-[0.625rem] font-medium uppercase tracking-wider text-muted-foreground">
+              State
+            </h4>
+            {activeIds.has(selected.id) && (
+              <span className="text-[0.625rem] text-primary">active</span>
+            )}
+          </div>
+          <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-background p-2 font-mono text-[0.6875rem] leading-relaxed text-foreground">
+            {selected.id}
+          </pre>
           {selected.data.description && (
-            <div className="mt-1 italic text-muted-foreground">
+            <p className="mt-2 italic text-muted-foreground">
               {selected.data.description}
-            </div>
+            </p>
           )}
-          <div className="mt-1 text-muted-foreground">
+          <div className="mt-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
             {selected.data.type ?? 'atomic'}
-            {activeIds.has(selected.id) && ' · active'}
           </div>
         </div>
       )}
