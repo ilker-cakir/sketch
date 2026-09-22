@@ -1,4 +1,4 @@
-import type { CodeFormat } from './machine';
+import type { CodeFormat } from './machine-parse';
 
 export interface Example {
   title: string;

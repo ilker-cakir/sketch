@@ -51,6 +51,14 @@ export interface ActivationTracker {
    * before the session connected reports null rather than a made-up start.
    */
   activeSince(nodeId: string): number | null;
+  /**
+   * Ids that became active within `windowMs` of `now`.
+   *
+   * This is what the camera follows: a parallel machine has states active all
+   * over the graph at once, so "what is active" is not a place to look — "what
+   * just changed" is.
+   */
+  recentlyActivated(now: number, windowMs: number): string[];
   reset(): void;
 }
 
@@ -112,6 +120,18 @@ export function createActivationTracker(
     activeSince(nodeId) {
       const entry = entries.get(nodeId);
       return entry && entry.target === 1 ? entry.changedAt : null;
+    },
+
+    recentlyActivated(now, windowMs) {
+      const ids: string[] = [];
+      for (const [id, entry] of entries) {
+        if (entry.target !== 1) continue;
+        // An entry seeded fully on is the state we joined mid-run, not a
+        // transition we watched happen, so it is not somewhere to jump to.
+        if (entry.from === 1) continue;
+        if (now - entry.changedAt <= windowMs) ids.push(id);
+      }
+      return ids;
     },
 
     reset() {

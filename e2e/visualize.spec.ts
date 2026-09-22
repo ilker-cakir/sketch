@@ -275,6 +275,68 @@ test.describe('/visualize', () => {
     await expect(page.getByTestId('graph-selection')).toHaveCount(0);
   });
 
+  test('follows the active state, and lets go when the user takes the camera', async ({
+    page,
+  }) => {
+    await waitForPaint(page);
+
+    const follow = page.getByTestId('graph-follow');
+    // On by default: watching where the machine goes is the point of the view.
+    await expect(follow).toHaveAttribute('aria-pressed', 'true');
+
+    // Panning hands the camera back, so the view stops moving under you.
+    const canvas = page.getByTestId('graph-canvas');
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 120, box.y + box.height / 2 - 90);
+    await page.mouse.up();
+    await expect(follow).toHaveAttribute('aria-pressed', 'false');
+
+    // And it can be turned back on.
+    await follow.click();
+    await expect(follow).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  /** Drags the graph right out of the viewport, which also releases follow. */
+  async function panAway(page: Page): Promise<void> {
+    const box = (await page.getByTestId('graph-canvas').boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + 60, y);
+    await page.mouse.down();
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.move(box.x + 60 + (i + 1) * 400, y + (i + 1) * 300);
+    }
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await probeCanvas(page)).painted, { timeout: 5000 })
+      .toBeLessThan(0.01);
+  }
+
+  test('brings the camera back to a state that becomes active offscreen', async ({
+    page,
+  }) => {
+    await waitForPaint(page);
+    await panAway(page);
+    await page.getByTestId('graph-follow').click();
+
+    // Entering a state pulls the view back to it.
+    await sendSnapshot(page, { payment: 'processing' });
+    await expect
+      .poll(async () => (await probeCanvas(page)).painted, { timeout: 5000 })
+      .toBeGreaterThan(0.01);
+  });
+
+  test('leaves the camera alone once following is released', async ({ page }) => {
+    await waitForPaint(page);
+    await panAway(page);
+
+    // Panning released follow, so the machine must not yank the view back.
+    await sendSnapshot(page, { payment: 'processing' });
+    await page.waitForTimeout(1200);
+    expect((await probeCanvas(page)).painted).toBeLessThan(0.01);
+  });
+
   test('exposes zoom and fit controls', async ({ page }) => {
     await waitForPaint(page);
 

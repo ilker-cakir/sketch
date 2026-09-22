@@ -3,6 +3,7 @@ import {
   ChevronUp,
   Crosshair,
   Loader2,
+  LocateFixed,
   Minus,
   Plus,
   TriangleAlert,
@@ -23,8 +24,6 @@ import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas';
 import { cn } from '@/lib/utils';
 
 interface GraphPanelProps {
-  /** Identifies the machine *definition*; layout is cached against it. */
-  layoutKey: string;
   graph: MachineGraph;
   activeIds: ReadonlySet<string>;
 }
@@ -40,11 +39,14 @@ const measureText = createCanvasMeasureText();
  * Wires a machine graph to the canvas renderer.
  *
  * This is the only component that re-renders at snapshot rate, and all it does
- * is hand `activeIds` to the canvas. Layout runs once per `layoutKey`.
+ * is hand `activeIds` to the canvas. Layout runs once per machine definition.
  */
-export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
+export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
   const [status, setStatus] = useState<LayoutStatus>({ phase: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // On by default: the point of the live view is watching where the machine
+  // goes. Any manual pan or zoom hands the camera back to the user.
+  const [following, setFollowing] = useState(true);
   const canvasRef = useRef<GraphCanvasHandle>(null);
 
   useEffect(() => {
@@ -52,7 +54,7 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
     setStatus({ phase: 'loading' });
     setSelectedId(null);
 
-    layoutMachine(layoutKey, graph, { measureText })
+    layoutMachine(graph, { measureText })
       .then((layout) => {
         if (cancelled) return;
         setStatus({ phase: 'ready', scene: buildScene(layout, measureText) });
@@ -68,7 +70,7 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [layoutKey, graph]);
+  }, [graph]);
 
   const scene = status.phase === 'ready' ? status.scene : null;
 
@@ -132,11 +134,21 @@ export function GraphPanel({ layoutKey, graph, activeIds }: GraphPanelProps) {
         scene={readyScene}
         activeIds={activeIds}
         selectedNodeId={selectedId}
+        follow={following}
+        onFollowChange={setFollowing}
         onSelect={select}
       />
 
       <div className="pointer-events-none absolute inset-x-3 top-3 flex items-start justify-between gap-2">
         <div className="pointer-events-auto flex items-center gap-0.5 rounded-md border border-border bg-card/95 p-1">
+          <ToolbarButton
+            label={following ? 'Stop following the active state' : 'Follow the active state'}
+            testId="graph-follow"
+            pressed={following}
+            onClick={() => setFollowing((on) => !on)}
+          >
+            <LocateFixed className="size-4" />
+          </ToolbarButton>
           <ToolbarButton label="Fit to view" onClick={() => canvasRef.current?.fit()}>
             <Crosshair className="size-4" />
           </ToolbarButton>
@@ -474,10 +486,14 @@ function ToolbarButton({
   label,
   onClick,
   children,
+  pressed,
+  testId,
 }: {
   label: string;
   onClick: () => void;
   children: React.ReactNode;
+  pressed?: boolean;
+  testId?: string;
 }) {
   return (
     <button
@@ -485,9 +501,12 @@ function ToolbarButton({
       onClick={onClick}
       title={label}
       aria-label={label}
+      data-testid={testId}
+      aria-pressed={pressed}
       className={cn(
         'inline-flex size-7 items-center justify-center rounded text-muted-foreground',
         'hover:bg-muted hover:text-foreground',
+        pressed && 'bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
       )}
     >
       {children}

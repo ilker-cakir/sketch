@@ -7,15 +7,14 @@ import {
   type AnyEventObject,
 } from 'xstate';
 import type { UserData } from './api';
+import { machineToGraph, type MachineGraph } from './machine';
 import {
   defaultMachineCode,
   getDefaultMachine,
-  machineToGraph,
   parseCode,
   detectFormat,
-  type MachineGraph,
   type CodeFormat,
-} from './machine';
+} from './machine-parse';
 
 
 export interface SimEvent {

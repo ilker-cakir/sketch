@@ -14,6 +14,9 @@ interface GraphCanvasProps {
   /** Currently active state ids. Pushed straight to the canvas, not rendered. */
   activeIds: ReadonlySet<string>;
   selectedNodeId?: string | null;
+  /** Camera chases states as they become active. */
+  follow?: boolean;
+  onFollowChange?: (following: boolean) => void;
   onSelect?: (node: SceneNode | null) => void;
   onHoverChange?: (hover: { node: SceneNode | null; edge: LayoutEdge | null }) => void;
   ref?: Ref<GraphCanvasHandle>;
@@ -31,6 +34,8 @@ export function GraphCanvas({
   scene,
   activeIds,
   selectedNodeId = null,
+  follow = false,
+  onFollowChange,
   onSelect,
   onHoverChange,
   ref,
@@ -39,8 +44,8 @@ export function GraphCanvas({
   const controllerRef = useRef<GraphController | null>(null);
 
   // Keep the latest callbacks reachable without re-creating the controller.
-  const callbacksRef = useRef({ onSelect, onHoverChange });
-  callbacksRef.current = { onSelect, onHoverChange };
+  const callbacksRef = useRef({ onSelect, onHoverChange, onFollowChange });
+  callbacksRef.current = { onSelect, onHoverChange, onFollowChange };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -51,6 +56,7 @@ export function GraphCanvas({
       controller = createGraphController(canvas, {
         onSelect: (node) => callbacksRef.current.onSelect?.(node),
         onHoverChange: (hover) => callbacksRef.current.onHoverChange?.(hover),
+        onFollowChange: (next) => callbacksRef.current.onFollowChange?.(next),
       });
     } catch {
       // No 2D context — the panel shows its own fallback.
@@ -75,6 +81,10 @@ export function GraphCanvas({
   useEffect(() => {
     controllerRef.current?.setSelected(selectedNodeId);
   }, [selectedNodeId]);
+
+  useEffect(() => {
+    controllerRef.current?.setFollow(follow);
+  }, [follow]);
 
   // The theme lives in CSS custom properties, so a class change on <html>
   // (dark mode) needs the resolved colours re-read.

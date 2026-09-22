@@ -9,7 +9,7 @@ import { EditorState } from '@codemirror/state';
 import { keymap } from '@codemirror/view';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { SimulationPanel } from '@/components/SimulationPanel';
-import type { CodeFormat } from '@/lib/machine';
+import type { CodeFormat } from '@/lib/machine-parse';
 
 interface CodePanelProps {
   code: string;

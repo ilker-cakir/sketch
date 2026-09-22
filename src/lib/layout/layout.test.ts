@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { createMachine } from 'xstate';
-import { machineToGraph, parseXStateMachineCode, defaultMachineCode } from '@/lib/machine';
+import { machineToGraph } from '@/lib/machine';
+import { parseXStateMachineCode, defaultMachineCode } from '@/lib/machine-parse';
 import type { MachineGraph } from '@/lib/machine';
 import { measureNode, truncateToWidth, type MeasureText } from './measure';
 import { lowestCommonAncestor, toElk } from './to-elk';

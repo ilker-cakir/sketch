@@ -4,7 +4,11 @@ import { createCanvasMeasureText, type MeasureText } from './measure';
 import { toElk, type ToElkOptions } from './to-elk';
 import { fromElk } from './from-elk';
 import type { LayoutGraph } from './types';
-import type { LayoutWorkerRequest, LayoutWorkerResponse } from './layout.worker';
+import { hashGraph, readPersistedLayout, writePersistedLayout } from './cache';
+import ElkApi from 'elkjs/lib/elk-api.js';
+// Emitted as a standalone asset; fetched only when the worker starts.
+import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
+import { resolveElk, type ElkInstance } from './elk-interop';
 
 /**
  * Computes machine layout, off the main thread when possible.
@@ -14,69 +18,52 @@ import type { LayoutWorkerRequest, LayoutWorkerResponse } from './layout.worker'
  * key and a request for a key already in flight joins the existing promise.
  */
 
-type Pending = {
-  resolve: (result: ElkNode) => void;
-  reject: (error: Error) => void;
-};
+/**
+ * ELK runs in elkjs's own worker rather than one of ours.
+ *
+ * A hand-rolled worker that imports `elk.bundled.js` cannot be made to work
+ * here: the bundle does `require('./elk-api.js')["default"]` internally, and
+ * under every bundler and worker setting tried that interop broke inside a
+ * worker chunk — the constructor threw at module scope, the worker died before
+ * it could report anything, and layout silently ran on the main thread while
+ * still downloading a second copy of ELK. `elk-api` with `workerUrl` is the
+ * mode elkjs ships for browsers: it loads `elk-worker.min.js` as a plain
+ * script, which sidesteps module interop entirely.
+ */
+let elkInstance: ElkInstance | null = null;
+let elkBroken = false;
 
-let worker: Worker | null = null;
-let workerBroken = false;
-let nextRequestId = 1;
-const pending = new Map<number, Pending>();
-
-function getWorker(): Worker | null {
-  if (workerBroken) return null;
-  if (worker) return worker;
+function getElk(): ElkInstance | null {
+  if (elkBroken) return null;
+  if (elkInstance) return elkInstance;
   try {
-    worker = new Worker(new URL('./layout.worker.ts', import.meta.url), {
-      type: 'module',
+    const ELK = resolveElk(ElkApi);
+    elkInstance = new ELK({
+      workerUrl: elkWorkerUrl,
+      workerFactory: (url) => new Worker(url),
     });
-    worker.addEventListener('message', (event: MessageEvent<LayoutWorkerResponse>) => {
-      const message = event.data;
-      const entry = pending.get(message.id);
-      if (!entry) return;
-      pending.delete(message.id);
-      if (message.ok) entry.resolve(message.result);
-      else entry.reject(new Error(message.error));
-    });
-    worker.addEventListener('error', () => {
-      // Fail every in-flight request; subsequent ones fall back to main thread.
-      failWorker(new Error('Layout worker crashed'));
-    });
-    return worker;
+    return elkInstance;
   } catch {
-    workerBroken = true;
+    elkBroken = true;
     return null;
   }
 }
 
-function failWorker(error: Error): void {
-  workerBroken = true;
-  worker?.terminate();
-  worker = null;
-  for (const [, entry] of pending) entry.reject(error);
-  pending.clear();
-}
-
-/** Runs ELK in-process. Used when no worker is available. */
+/** Runs ELK in-process. Used when the worker cannot be created. */
 async function layoutOnMainThread(root: ElkNode): Promise<ElkNode> {
-  const { default: ELK } = await import('elkjs/lib/elk.bundled.js');
+  const imported = await import('elkjs/lib/elk.bundled.js');
+  const ELK = resolveElk(imported);
   return new ELK().layout(root);
 }
 
 function runElk(root: ElkNode): Promise<ElkNode> {
-  const activeWorker = getWorker();
-  if (!activeWorker) return layoutOnMainThread(root);
-
-  const id = nextRequestId++;
-  return new Promise<ElkNode>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    const request: LayoutWorkerRequest = { id, root };
-    activeWorker.postMessage(request);
-  }).catch((error: Error) => {
-    // A broken worker should not lose the result the caller asked for.
-    if (workerBroken) return layoutOnMainThread(root);
-    throw error;
+  const elk = getElk();
+  if (!elk) return layoutOnMainThread(root);
+  return elk.layout(root).catch(() => {
+    // A worker that fails mid-flight must not lose the caller's result.
+    elkBroken = true;
+    elkInstance = null;
+    return layoutOnMainThread(root);
   });
 }
 
@@ -94,33 +81,46 @@ function getMeasureText(): MeasureText {
 }
 
 /**
- * Lays out `graph`, reusing a cached result for the same `key`.
+ * Lays out `graph`, reusing any result already computed for the same content.
  *
- * `key` should identify the machine *definition* — an actor's session id is a
- * good choice, since its definition never changes over that actor's life.
+ * The cache is keyed on a digest of the definition rather than on the caller,
+ * because layout is a pure function of the definition and costs about a second
+ * on a large machine. Two actors running the same machine, an actor that
+ * reconnects with a new session id, and a page reload therefore all reuse one
+ * layout: in memory first, then from IndexedDB.
  */
 export function layoutMachine(
-  key: string,
   graph: MachineGraph,
   options: LayoutOptions = {},
 ): Promise<LayoutGraph> {
+  const { measureText = getMeasureText(), ...elkOptions } = options;
+  const key = hashGraph(graph, JSON.stringify(elkOptions));
+
   const cached = cache.get(key);
   if (cached) return Promise.resolve(cached);
 
   const existing = inflight.get(key);
   if (existing) return existing;
 
-  const { measureText = getMeasureText(), ...elkOptions } = options;
-  const built = toElk(graph, measureText, elkOptions);
+  const promise = readPersistedLayout(key)
+    .then((persisted) => {
+      if (persisted) return persisted;
 
-  const promise = runElk(built.root)
-    .then((result) =>
-      fromElk(result, graph, {
-        selfEdgeIds: built.selfEdgeIds,
-        droppedEdgeCount: built.droppedEdgeCount,
-        edgeOriginById: built.edgeOriginById,
-      }),
-    )
+      const built = toElk(graph, measureText, elkOptions);
+      return runElk(built.root)
+        .then((result) =>
+          fromElk(result, graph, {
+            selfEdgeIds: built.selfEdgeIds,
+            droppedEdgeCount: built.droppedEdgeCount,
+            edgeOriginById: built.edgeOriginById,
+          }),
+        )
+        .then((laidOut) => {
+          // Fire and forget: a failed write costs a recompute, nothing more.
+          void writePersistedLayout(key, laidOut);
+          return laidOut;
+        });
+    })
     .then((laidOut) => {
       cache.set(key, laidOut);
       return laidOut;
@@ -133,7 +133,7 @@ export function layoutMachine(
   return promise;
 }
 
-/** Drops a cached layout, e.g. when an actor's definition is replaced. */
+/** Drops an in-memory cached layout. */
 export function invalidateLayout(key: string): void {
   cache.delete(key);
 }
@@ -142,6 +142,6 @@ export function invalidateLayout(key: string): void {
 export function resetLayoutClient(): void {
   cache.clear();
   inflight.clear();
-  failWorker(new Error('reset'));
-  workerBroken = false;
+  elkInstance = null;
+  elkBroken = false;
 }

@@ -292,6 +292,93 @@ on plain comparable props, with the one snapshot-dependent input — which
 children are active — collapsed into a joined string, so a snapshot that does
 not change this state's highlighting does not touch its rows.
 
+## Layout cost and caching
+
+Measured on a machine at the target shape (100 states, 600 transitions, three
+levels, parallel root). Rendering is not the constraint; layout is.
+
+| Stage | Cost |
+| --- | --- |
+| Draw, whole graph in view | p50 1.5 ms |
+| Draw, zoomed in | p50 0.3 ms |
+| 120 snapshots posted back to back | 91 frames, 0.3 ms each |
+| Scene build | 3 ms |
+| **ELK layout** | **~800 ms** |
+
+ELK grows faster than the machine does — roughly quadratically: 28 nodes take
+290 ms, 100 take 800 ms, 196 take 2.9 s and 389 take 12.8 s.
+
+Options were measured rather than guessed. `thoroughness`, `nodePlacement`,
+`crossingMinimization`, `edgeRouting` and `considerModelOrder` all produced
+byte-identical output on this graph — they are not where the time goes. Two
+things do matter, and both were rejected:
+
+- `hierarchyHandling: SEPARATE_CHILDREN` is 12× faster and far more compact,
+  but it produces **no geometry at all** for every edge that crosses a
+  container boundary — 216 of 381 on the test machine. It looks tidier only
+  because more than half the transitions are missing.
+- Withholding edge labels from ELK is 2.3× faster and lays out 2.8× smaller,
+  but hands label placement back to us, and the denser result makes overlap
+  more likely, not less.
+
+So the cost is accepted and paid once instead. `layoutMachine` keys its cache
+on a digest of the definition — `hashGraph` over the node and edge fields that
+reach ELK — rather than on the caller's session id, and persists results in
+IndexedDB. A reconnecting actor, a second actor running the same machine, and a
+page reload therefore all reuse one layout. `LAYOUT_VERSION` invalidates the
+store when geometry-affecting code changes; every storage path degrades to a
+recompute rather than an error.
+
+### The layout worker never ran in production (fixed)
+
+The worker exists so a second of layout does not block the UI, and it had never
+worked in a built bundle. `elk.bundled.js` does
+`require('./elk-api.js')["default"]` internally; under the worker chunk's
+CommonJS interop that resolved to `undefined`, so the subclass it builds threw
+"is not a constructor" at module scope. The worker died before it could report
+anything, the client's error handler marked it broken, and every layout
+silently ran on the main thread — while still downloading a second 1.4 MB copy
+of ELK for the fallback. Only a production build showed it; the dev server
+serves ELK as ESM and works.
+
+No bundler setting fixed it — `worker.format: 'es'`, `requireReturnsDefault`,
+static and dynamic imports, and a classic worker loading the bundle with
+`importScripts` all failed, the last one from inside ELK itself. The hand-rolled
+worker is gone. `elk-api` with a `workerUrl` pointing at the emitted
+`elk-worker.min.js` is the mode elkjs ships for browsers, and it works in both
+a build and the dev server. Layout now genuinely runs off the main thread, and
+only one copy of ELK is downloaded.
+
+| | Route transfer |
+| --- | --- |
+| Before | 7.0 MB |
+| After the parser split | 3.4 MB |
+| After the worker fix | **2.2 MB** |
+
+## Route payload
+
+`/visualize` transferred 7.0 MB. `machine.ts` was split: the graph model and
+its helpers stay, while `machine-parse.ts` holds the XState, JSON, YAML and
+Mermaid parsers and their dependencies (a TypeScript stripper, a YAML parser, a
+Mermaid parser). Only the editor imports those, and live inspection receives a
+machine config over the wire, so they no longer reach the inspect and visualize
+bundles. Transfer dropped to 3.4 MB.
+
+## Following the active state
+
+The camera can chase the machine, which is what makes the view a debugger
+rather than a diagram. Two rules, both pure and tested in `follow.ts`:
+
+- It follows what *recently* became active, not what is active. A parallel
+  machine has states active across the whole graph at once, so following
+  everything active just fits the diagram and never moves again.
+- It stays still while the target is already comfortably on screen, and never
+  zooms in — a single small state should not fill the screen because it became
+  active. It zooms out only when the target does not fit.
+
+Any manual pan, zoom, fit or reveal hands the camera back and turns following
+off, which the toolbar toggle reflects.
+
 ## Error handling
 
 | Condition | Behaviour |

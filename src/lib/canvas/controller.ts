@@ -14,12 +14,15 @@ import {
   tweenCamera,
   type CameraTween,
 } from './animation';
+import { followCamera, unionRect } from './follow';
 import { hitTestEdge, hitTestNode, type Scene, type SceneNode } from './scene';
 import { readCanvasTheme, type CanvasTheme } from './theme';
 
 export interface GraphControllerCallbacks {
   onHoverChange?: (hover: { node: SceneNode | null; edge: LayoutEdge | null }) => void;
   onSelect?: (node: SceneNode | null) => void;
+  /** Fires when following turns itself off because the user took the camera. */
+  onFollowChange?: (following: boolean) => void;
 }
 
 export interface GraphController {
@@ -28,6 +31,8 @@ export interface GraphController {
   setSelected(nodeId: string | null): void;
   /** Re-reads theme tokens, e.g. after a dark-mode toggle. */
   refreshTheme(): void;
+  /** Whether the camera chases states as they become active. */
+  setFollow(following: boolean): void;
   fit(): void;
   zoomBy(factor: number): void;
   centerOn(nodeId: string): void;
@@ -36,6 +41,13 @@ export interface GraphController {
 
 /** Pointer movement beyond this many pixels is a pan, not a click. */
 const DRAG_THRESHOLD = 4;
+/**
+ * How recently a state must have become active for the camera to chase it.
+ *
+ * Long enough to cover a burst of snapshots arriving together, short enough
+ * that the camera does not chase something that happened a moment ago.
+ */
+const FOLLOW_WINDOW_MS = 600;
 /** Hit tolerance for edges, in screen pixels. */
 const EDGE_TOLERANCE = 6;
 
@@ -67,6 +79,36 @@ export function createGraphController(
 
   const activation = createActivationTracker();
   let cameraTween: CameraTween | null = null;
+  let following = false;
+
+  /** Stops chasing, because the user has taken the camera. */
+  function releaseFollow(): void {
+    if (!following) return;
+    following = false;
+    callbacks.onFollowChange?.(false);
+  }
+
+  /**
+   * Moves the camera to whatever just became active, if it is off screen.
+   *
+   * Prefers the leaf states: when a child activates so does its container, and
+   * jumping to the container would frame a region rather than the state.
+   */
+  function followRecentlyActive(now: number): void {
+    if (!following || !scene || width === 0 || height === 0) return;
+
+    const recent = activation.recentlyActivated(now, FOLLOW_WINDOW_MS);
+    if (recent.length === 0) return;
+
+    const nodes = recent
+      .map((id) => scene?.nodeById.get(id))
+      .filter((n): n is SceneNode => n !== undefined);
+    const leaves = nodes.filter((n) => !n.isContainer);
+    const target = unionRect(leaves.length > 0 ? leaves : nodes);
+
+    const next = followCamera(target, camera, width, height);
+    if (next) startTween(next);
+  }
 
   /** Live `after` timers for currently active sources, keyed by edge id. */
   function edgeTimerProgress(edgeId: string, now: number): number | null {
@@ -216,6 +258,7 @@ export function createGraphController(
     dragMoved = true;
     lastPointer = position;
     cameraTween = null;
+    releaseFollow();
     camera = pan(camera, dx, dy);
     markDirty();
   }
@@ -248,6 +291,7 @@ export function createGraphController(
   function onWheel(event: WheelEvent): void {
     event.preventDefault();
     cameraTween = null;
+    releaseFollow();
     // Pinch-zoom arrives as a wheel event with ctrlKey set; plain wheel pans.
     if (event.ctrlKey || event.metaKey) {
       const factor = Math.exp(-event.deltaY / 200);
@@ -290,8 +334,10 @@ export function createGraphController(
       markDirty();
     },
     setActiveIds(ids) {
+      const now = performance.now();
       state = { ...state, activeIds: ids };
-      activation.setActive(ids, performance.now());
+      activation.setActive(ids, now);
+      followRecentlyActive(now);
       markDirty();
     },
     setSelected(nodeId) {
@@ -303,16 +349,23 @@ export function createGraphController(
       theme = readCanvasTheme(canvas);
       markDirty();
     },
+    setFollow(next) {
+      following = next;
+      if (next) followRecentlyActive(performance.now());
+    },
     fit() {
       if (!scene) return;
+      releaseFollow();
       startTween(fitToBounds(scene.bounds, width, height));
     },
     zoomBy(factor) {
+      releaseFollow();
       startTween(zoomCameraBy(camera, factor, { x: width / 2, y: height / 2 }));
     },
     centerOn(nodeId) {
       const node = scene?.nodeById.get(nodeId);
       if (!node) return;
+      releaseFollow();
       // Jumping to a node from a fit-out view would centre something too small
       // to read, so zoom in far enough for its detail to be drawn.
       const scale = Math.max(camera.scale, LOD_DETAIL);

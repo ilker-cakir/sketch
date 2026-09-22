@@ -136,6 +136,48 @@ describe('activation tracker', () => {
     });
   });
 
+  describe('recentlyActivated', () => {
+    it('reports what just turned on, not everything that is on', () => {
+      // A parallel machine always has states active across the whole graph;
+      // only the ones that just changed are somewhere worth looking.
+      const t = createActivationTracker();
+      t.setActive(new Set(['a', 'b']), 0);
+      t.setActive(new Set(['a', 'b', 'c']), 1000);
+      expect(t.recentlyActivated(1000, 600)).toEqual(['c']);
+    });
+
+    it('forgets a state once the window has passed', () => {
+      const t = createActivationTracker();
+      t.setActive(new Set(['a']), 0);
+      t.setActive(new Set(['a', 'b']), 1000);
+      expect(t.recentlyActivated(1599, 600)).toEqual(['b']);
+      expect(t.recentlyActivated(1601, 600)).toEqual([]);
+    });
+
+    it('ignores the set we joined mid-run', () => {
+      // Those states did not transition where we could see it, so jumping to
+      // them on connect would be arbitrary.
+      const t = createActivationTracker();
+      t.setActive(new Set(['a', 'b']), 0);
+      expect(t.recentlyActivated(0, 600)).toEqual([]);
+    });
+
+    it('ignores states on their way out', () => {
+      const t = createActivationTracker();
+      t.setActive(new Set(['a']), 0);
+      t.setActive(new Set(['a', 'b']), 500);
+      t.setActive(new Set(['a']), 600);
+      expect(t.recentlyActivated(600, 600)).toEqual([]);
+    });
+
+    it('reports several states entered together', () => {
+      const t = createActivationTracker();
+      t.setActive(new Set(['a']), 0);
+      t.setActive(new Set(['a', 'b', 'c']), 1000);
+      expect(t.recentlyActivated(1000, 600).sort()).toEqual(['b', 'c']);
+    });
+  });
+
   it('clears on reset', () => {
     const t = createActivationTracker();
     t.setActive(new Set(['a']), 0);

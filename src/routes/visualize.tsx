@@ -62,7 +62,6 @@ function VisualizeRoute() {
       <section className="min-h-0 flex-1 overflow-hidden">
         {selectedActor.graph ? (
           <GraphPanel
-            layoutKey={selectedActor.sessionId}
             graph={selectedActor.graph}
             activeIds={activeIds}
           />

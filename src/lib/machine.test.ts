@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { detectFormat, parseMermaidCode, parseXStateMachineCode, machineToGraph, getEventCategory } from './machine';
+import { machineToGraph, getEventCategory } from './machine';
+import {
+  detectFormat,
+  parseMermaidCode,
+  parseXStateMachineCode,
+} from './machine-parse';
 
 describe('detectFormat', () => {
   it('detects Mermaid diagrams', () => {
