@@ -28,6 +28,23 @@ export const HEADER_HEIGHT = 28;
 export const ROW_HEIGHT = 18;
 /** Leading space in the header reserved for type affordance glyphs. */
 export const GLYPH_WIDTH = 18;
+/** Trailing space in the header for the expand/collapse chevron. */
+export const CHEVRON_WIDTH = 14;
+/** Gap between the hidden-state count and the chevron. */
+export const BADGE_GAP = 6;
+
+/** What a collapsed container reports about the states it is hiding. */
+export function collapsedBadgeText(hiddenCount: number): string {
+  return `${hiddenCount} ${hiddenCount === 1 ? 'state' : 'states'}`;
+}
+
+/** Header decoration that changes how wide a node needs to be. */
+export interface NodeDecoration {
+  /** Reserve room for the expand/collapse chevron. */
+  chevron?: boolean;
+  /** Hidden-state count shown on a collapsed container. */
+  badge?: string | null;
+}
 
 /** Padding between a container's border and its laid-out children. */
 export const CONTAINER_PAD_X = 14;
@@ -120,11 +137,19 @@ function rowWidth(row: NodeRow, measureText: MeasureText): number {
 export function measureNode(
   data: StateNodeData,
   measureText: MeasureText,
+  decoration: NodeDecoration = {},
 ): NodeMetrics {
   const rows = nodeRows(data);
 
+  const trailing =
+    (decoration.chevron ? CHEVRON_WIDTH : 0) +
+    (decoration.badge ? measureText(decoration.badge, FONT_ROW_KEY) + BADGE_GAP : 0);
+
   const headerWidth =
-    GLYPH_WIDTH + measureText(data.key, FONT_HEADER) + NODE_PAD_X * 2;
+    GLYPH_WIDTH +
+    measureText(data.key, FONT_HEADER) +
+    trailing +
+    NODE_PAD_X * 2;
   const widest = rows.reduce(
     (max, row) => Math.max(max, rowWidth(row, measureText) + NODE_PAD_X * 2),
     headerWidth,
@@ -163,10 +188,26 @@ export function edgeLabelText(data: TransitionData): string {
  * transition gets a box — one with no event name still carries a glyph, since
  * an empty event type is an `always` transition.
  */
+export function mergedLabelText(count: number): string {
+  return `${count} transitions`;
+}
+
 export function measureEdgeLabel(
   data: TransitionData,
   measureText: MeasureText,
+  mergedCount = 1,
 ): { width: number; height: number; text: string } {
+  if (mergedCount > 1) {
+    // A merged edge stands for many events, so naming one of them — or showing
+    // one of their category glyphs — would be a lie about the rest.
+    const text = mergedLabelText(mergedCount);
+    return {
+      width: Math.ceil(EDGE_LABEL_PAD_X * 2 + measureText(text, FONT_LABEL)),
+      height: EDGE_LABEL_HEIGHT,
+      text,
+    };
+  }
+
   const text = edgeLabelText(data);
   const hasIcon = getEventCategory(data.eventType) !== null;
 

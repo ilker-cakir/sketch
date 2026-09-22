@@ -15,7 +15,14 @@ import {
   zoomBy,
   type Camera,
 } from './camera';
-import { buildScene, hitTestEdge, hitTestNode, relativeTarget } from './scene';
+import {
+  buildScene,
+  chevronRect,
+  hitTestChevron,
+  hitTestEdge,
+  hitTestNode,
+  relativeTarget,
+} from './scene';
 import { EDGE_ICON_WIDTH, measureEdgeLabel } from '@/lib/layout/measure';
 import type { LayoutEdge } from '@/lib/layout/types';
 import { getRelativeTarget, type MachineGraph } from '@/lib/machine';
@@ -39,6 +46,8 @@ function node(
     isContainer: false,
     isInitial: false,
     isRegion: false,
+    isCollapsed: false,
+    hiddenCount: 0,
     data: {
       key: id,
       type: 'atomic',
@@ -172,6 +181,7 @@ describe('scene', () => {
           actions: [],
           isTargetless: false,
         },
+        mergedCount: 1,
         points: [
           { x: 190, y: 80 },
           { x: 600, y: 80 },
@@ -265,6 +275,7 @@ function edge(
     points: [],
     label: null,
     isSelf: sourceId === targetId,
+    mergedCount: 1,
   };
 }
 
@@ -587,5 +598,70 @@ describe('relativeTarget parity with the DOM renderer', () => {
     expect(relativeTarget(scene, source, target)).toBe(
       getRelativeTarget(source, target, graph),
     );
+  });
+});
+
+describe('collapse affordance', () => {
+  const build = (over: Partial<LayoutNode>) =>
+    buildScene(
+      {
+        width: 400,
+        height: 200,
+        droppedEdgeCount: 0,
+        nodes: [node('m', { x: 0, y: 0, width: 200, height: 60 }, over)],
+        edges: [],
+      },
+      fakeMeasure,
+    );
+
+  it('gives a container a chevron', () => {
+    const scene = build({ isContainer: true });
+    expect(scene.nodeById.get('m')!.hasChevron).toBe(true);
+    expect(chevronRect(scene.nodeById.get('m')!)).not.toBeNull();
+  });
+
+  it('gives a collapsed container a chevron even with no children left', () => {
+    // Collapsing removes the children, so `isContainer` is false by then.
+    const scene = build({ isContainer: false, isCollapsed: true, hiddenCount: 4 });
+    expect(scene.nodeById.get('m')!.hasChevron).toBe(true);
+  });
+
+  it('gives a leaf no chevron and no hit region', () => {
+    const scene = build({});
+    expect(scene.nodeById.get('m')!.hasChevron).toBe(false);
+    expect(chevronRect(scene.nodeById.get('m')!)).toBeNull();
+  });
+
+  it('reports what a collapsed container hides', () => {
+    expect(build({ isCollapsed: true, hiddenCount: 4 }).nodeById.get('m')!.badgeText).toBe(
+      '4 states',
+    );
+    expect(build({ isCollapsed: true, hiddenCount: 1 }).nodeById.get('m')!.badgeText).toBe(
+      '1 state',
+    );
+  });
+
+  it('shows no badge while expanded', () => {
+    expect(build({ isContainer: true }).nodeById.get('m')!.badgeText).toBeNull();
+  });
+
+  describe('hitTestChevron', () => {
+    const scene = build({ isContainer: true });
+    const target = scene.nodeById.get('m')!;
+
+    it('finds the chevron at its own centre', () => {
+      const rect = chevronRect(target)!;
+      expect(
+        hitTestChevron(scene, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 })?.id,
+      ).toBe('m');
+    });
+
+    it('is null elsewhere on the node, so selection still wins there', () => {
+      expect(hitTestChevron(scene, { x: target.x + 10, y: target.y + 10 })).toBeNull();
+    });
+
+    it('is null off the node entirely', () => {
+      expect(hitTestChevron(scene, { x: 900, y: 900 })).toBeNull();
+    });
   });
 });

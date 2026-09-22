@@ -17,6 +17,7 @@ interface GraphCanvasProps {
   /** Camera chases states as they become active. */
   follow?: boolean;
   onFollowChange?: (following: boolean) => void;
+  onToggleCollapse?: (nodeId: string) => void;
   onSelect?: (node: SceneNode | null) => void;
   onHoverChange?: (hover: { node: SceneNode | null; edge: LayoutEdge | null }) => void;
   ref?: Ref<GraphCanvasHandle>;
@@ -36,6 +37,7 @@ export function GraphCanvas({
   selectedNodeId = null,
   follow = false,
   onFollowChange,
+  onToggleCollapse,
   onSelect,
   onHoverChange,
   ref,
@@ -44,8 +46,13 @@ export function GraphCanvas({
   const controllerRef = useRef<GraphController | null>(null);
 
   // Keep the latest callbacks reachable without re-creating the controller.
-  const callbacksRef = useRef({ onSelect, onHoverChange, onFollowChange });
-  callbacksRef.current = { onSelect, onHoverChange, onFollowChange };
+  const callbacksRef = useRef({
+    onSelect,
+    onHoverChange,
+    onFollowChange,
+    onToggleCollapse,
+  });
+  callbacksRef.current = { onSelect, onHoverChange, onFollowChange, onToggleCollapse };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -57,6 +64,7 @@ export function GraphCanvas({
         onSelect: (node) => callbacksRef.current.onSelect?.(node),
         onHoverChange: (hover) => callbacksRef.current.onHoverChange?.(hover),
         onFollowChange: (next) => callbacksRef.current.onFollowChange?.(next),
+        onToggleCollapse: (id) => callbacksRef.current.onToggleCollapse?.(id),
       });
     } catch {
       // No 2D context — the panel shows its own fallback.

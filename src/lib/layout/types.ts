@@ -30,6 +30,10 @@ export interface LayoutNode extends Rect {
   isInitial: boolean;
   /** Whether the parent is a parallel state, i.e. this node is a region. */
   isRegion: boolean;
+  /** Drawn as a closed box: it has children, but they are not laid out. */
+  isCollapsed: boolean;
+  /** How many descendants this node is hiding, when collapsed. */
+  hiddenCount: number;
 }
 
 /**
@@ -46,6 +50,11 @@ export interface LayoutEdge {
   label: (Rect & { text: string }) | null;
   /** Source and target are the same node — drawn as a loop glyph. */
   isSelf: boolean;
+  /**
+   * Transitions this edge stands for. Above 1 it is a merged edge, produced by
+   * collapsing several transitions onto the same pair of containers.
+   */
+  mergedCount: number;
 }
 
 export interface LayoutGraph {

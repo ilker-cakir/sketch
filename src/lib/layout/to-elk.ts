@@ -3,6 +3,7 @@ import { getChildren, getRoots } from '@statelyai/graph';
 import type { GraphNode } from '@statelyai/graph';
 import type { MachineGraph, StateNodeData } from '@/lib/machine';
 import {
+  collapsedBadgeText,
   CONTAINER_PAD_BOTTOM,
   CONTAINER_PAD_X,
   measureEdgeLabel,
@@ -22,6 +23,12 @@ export interface ToElkOptions {
    * only at the top level.
    */
   hierarchyHandling?: 'INCLUDE_CHILDREN' | 'SEPARATE_CHILDREN';
+  /** Containers drawn closed; their boxes need room for the count badge. */
+  collapsed?: ReadonlySet<string>;
+  /** Visible node id → descendants folded into it. */
+  hiddenCountById?: ReadonlyMap<string, number>;
+  /** Representative edge id → transitions it stands for after collapsing. */
+  mergedCountById?: ReadonlyMap<string, number>;
 }
 
 export interface ToElkResult {
@@ -87,7 +94,13 @@ export function toElk(
   measureText: MeasureText,
   options: ToElkOptions = {},
 ): ToElkResult {
-  const { direction = 'RIGHT', hierarchyHandling = 'INCLUDE_CHILDREN' } = options;
+  const {
+    direction = 'RIGHT',
+    hierarchyHandling = 'INCLUDE_CHILDREN',
+    collapsed,
+    hiddenCountById,
+    mergedCountById,
+  } = options;
 
   const metrics = new Map<string, NodeMetrics>();
   const parentById = new Map<string, string | null>();
@@ -99,7 +112,13 @@ export function toElk(
 
   function build(node: GraphNode<StateNodeData>): ElkNode {
     const children = getChildren(graph, node.id) as GraphNode<StateNodeData>[];
-    const measured = measureNode(node.data, measureText);
+    const isCollapsed = collapsed?.has(node.id) ?? false;
+    const measured = measureNode(node.data, measureText, {
+      chevron: children.length > 0 || isCollapsed,
+      badge: isCollapsed
+        ? collapsedBadgeText(hiddenCountById?.get(node.id) ?? 0)
+        : null,
+    });
     metrics.set(node.id, measured);
 
     const elkNode: ElkNode = {
@@ -142,7 +161,9 @@ export function toElk(
       sources: [edge.sourceId],
       targets: [edge.targetId],
       sections: [],
-      labels: [measureEdgeLabel(edge.data, measureText)],
+      labels: [
+        measureEdgeLabel(edge.data, measureText, mergedCountById?.get(edge.id) ?? 1),
+      ],
     };
 
     // ELK expresses the edge's geometry relative to the lowest common ancestor

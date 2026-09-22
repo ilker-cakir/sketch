@@ -97,6 +97,12 @@ export function fromElk(
     selfEdgeIds: Set<string>;
     droppedEdgeCount: number;
     edgeOriginById: Map<string, string | null>;
+    /** Containers whose insides were removed before layout. */
+    collapsed?: ReadonlySet<string>;
+    /** Visible node id → descendants folded into it. */
+    hiddenCountById?: ReadonlyMap<string, number>;
+    /** Representative edge id → transitions it stands for. */
+    mergedCountById?: ReadonlyMap<string, number>;
   },
 ): LayoutGraph {
   const rects = new Map<string, { x: number; y: number; width: number; height: number }>();
@@ -143,6 +149,8 @@ export function fromElk(
       isContainer: (childCount.get(node.id) ?? 0) > 0,
       isInitial: parent?.data.initialId === node.id,
       isRegion: parent?.data.type === 'parallel',
+      isCollapsed: options.collapsed?.has(node.id) ?? false,
+      hiddenCount: options.hiddenCountById?.get(node.id) ?? 0,
       ...rect,
     });
   }
@@ -162,6 +170,7 @@ export function fromElk(
       points: geo?.points ?? [],
       label: geo?.label ?? null,
       isSelf,
+      mergedCount: options.mergedCountById?.get(edge.id) ?? 1,
     });
   }
 

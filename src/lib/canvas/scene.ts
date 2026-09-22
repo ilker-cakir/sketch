@@ -1,8 +1,13 @@
 import type { LayoutEdge, LayoutGraph, LayoutNode, Point, Rect } from '@/lib/layout/types';
 import {
+  BADGE_GAP,
+  CHEVRON_WIDTH,
+  collapsedBadgeText,
   FONT_DESCRIPTION,
   FONT_HEADER,
   FONT_LABEL,
+  FONT_ROW_KEY,
+  HEADER_HEIGHT,
   NODE_PAD_X,
   GLYPH_WIDTH,
   nodeRows,
@@ -21,6 +26,10 @@ export interface SceneNode extends LayoutNode {
    * as a diamond, matching how `StateNodeViz` marks a choice pseudostate.
    */
   isChoice: boolean;
+  /** Hidden-state count drawn on a collapsed container, or null. */
+  badgeText: string | null;
+  /** Whether the expand/collapse chevron is drawn and clickable. */
+  hasChevron: boolean;
 }
 
 export interface Scene {
@@ -157,7 +166,16 @@ export function buildScene(
   };
 
   const nodes: SceneNode[] = layout.nodes.map((node) => {
-    const headerBudget = node.width - NODE_PAD_X * 2 - GLYPH_WIDTH;
+    // A collapsed container has no children in the laid-out graph, so
+    // `isContainer` is false for it — the chevron follows either.
+    const hasChevron = node.isContainer || node.isCollapsed;
+    const badgeText = node.isCollapsed ? collapsedBadgeText(node.hiddenCount) : null;
+    const headerBudget =
+      node.width -
+      NODE_PAD_X * 2 -
+      GLYPH_WIDTH -
+      (hasChevron ? CHEVRON_WIDTH : 0) -
+      (badgeText ? measureText(badgeText, FONT_ROW_KEY) + BADGE_GAP : 0);
     return {
       ...node,
       headerText: truncateToWidth(node.data.key, FONT_HEADER, headerBudget, measureText),
@@ -165,6 +183,8 @@ export function buildScene(
         ? []
         : rowsFitToWidth(nodeRows(node.data), node.width, measureText),
       isChoice: isChoiceNode(node),
+      badgeText,
+      hasChevron,
     };
   });
 
@@ -215,6 +235,40 @@ export function buildScene(
     selfLoopLabels,
     edgeDelayMs,
   };
+}
+
+/**
+ * Where the expand/collapse chevron sits on a node, or null if it has none.
+ *
+ * Shared by the renderer and hit-testing so the target a click must land on is
+ * the shape the user can see.
+ */
+export function chevronRect(node: SceneNode): Rect | null {
+  if (!node.hasChevron) return null;
+  const size = CHEVRON_WIDTH;
+  return {
+    x: node.x + node.width - NODE_PAD_X - size,
+    y: node.y + (HEADER_HEIGHT - size) / 2,
+    width: size,
+    height: size,
+  };
+}
+
+/** The node whose chevron covers `p`, or null. */
+export function hitTestChevron(scene: Scene, p: Point): SceneNode | null {
+  for (const node of scene.hitOrder) {
+    const rect = chevronRect(node);
+    if (!rect) continue;
+    if (
+      p.x >= rect.x &&
+      p.x <= rect.x + rect.width &&
+      p.y >= rect.y &&
+      p.y <= rect.y + rect.height
+    ) {
+      return node;
+    }
+  }
+  return null;
 }
 
 /**

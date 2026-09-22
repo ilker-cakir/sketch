@@ -337,6 +337,59 @@ test.describe('/visualize', () => {
     expect((await probeCanvas(page)).painted).toBeLessThan(0.01);
   });
 
+  test('collapses a container and folds its states away', async ({ page }) => {
+    await waitForPaint(page);
+    const counts = page.getByTestId('graph-counts');
+    await expect(counts).toContainText('6 states');
+    await expect(counts).not.toContainText('hidden');
+
+    await page.getByTestId('graph-collapse-all').click();
+
+    // payment's two children fold into it; cart and done have none.
+    await expect(counts).toContainText('4 states');
+    await expect(counts).toContainText('2 states hidden');
+
+    await page.getByTestId('graph-expand-all').click();
+    await expect(counts).toContainText('6 states');
+    await expect(counts).not.toContainText('hidden');
+  });
+
+  test('collapses from the details panel and reports what is hidden', async ({
+    page,
+  }) => {
+    await waitForPaint(page);
+    await selectPath(page, ['payment']);
+    await expect(page.getByTestId('graph-selection-id')).toHaveText('checkout.payment');
+    await expect(page.getByTestId('graph-substate')).toHaveCount(2);
+
+    const toggle = page.getByTestId('graph-selection-collapse');
+    await expect(toggle).toContainText('Collapse');
+    await toggle.click();
+
+    // Still selected, now closed, and saying what it holds.
+    await expect(page.getByTestId('graph-selection-id')).toHaveText('checkout.payment');
+    await expect(toggle).toContainText('Expand 2');
+    await expect(page.getByTestId('graph-counts')).toContainText('2 states hidden');
+    // Its children are no longer part of the graph, so they are not listed.
+    await expect(page.getByTestId('graph-substate')).toHaveCount(0);
+
+    await toggle.click();
+    await expect(page.getByTestId('graph-substate')).toHaveCount(2);
+  });
+
+  test('clears a selection that collapsing folded away', async ({ page }) => {
+    await waitForPaint(page);
+    await selectPath(page, ['payment', 'processing']);
+    await expect(page.getByTestId('graph-selection-id')).toHaveText(
+      'checkout.payment.processing',
+    );
+
+    await page.getByTestId('graph-collapse-all').click();
+
+    // The selected state no longer exists in the laid-out graph.
+    await expect(page.getByTestId('graph-selection')).toHaveCount(0);
+  });
+
   test('exposes zoom and fit controls', async ({ page }) => {
     await waitForPaint(page);
 

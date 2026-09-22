@@ -1,5 +1,7 @@
 import type { LayoutEdge, Point, Rect } from '@/lib/layout/types';
 import {
+  BADGE_GAP,
+  CHEVRON_WIDTH,
   EDGE_GUARD_GAP,
   EDGE_ICON_WIDTH,
   EDGE_LABEL_PAD_X,
@@ -12,10 +14,11 @@ import {
   NODE_PAD_X,
   ROW_HEIGHT,
   edgeLabelText,
+  mergedLabelText,
 } from '@/lib/layout/measure';
 import { getEventCategory } from '@/lib/machine';
 import { rectsIntersect, visibleWorldRect, type Camera } from './camera';
-import type { Scene, SceneNode } from './scene';
+import { chevronRect, type Scene, type SceneNode } from './scene';
 import type { CanvasTheme } from './theme';
 
 /**
@@ -199,6 +202,44 @@ function drawNodeGlyph(
   }
 }
 
+/**
+ * The disclosure chevron, pointing down when open and right when closed —
+ * the same direction language as a file tree.
+ */
+function drawChevron(
+  ctx: CanvasRenderingContext2D,
+  theme: CanvasTheme,
+  node: SceneNode,
+  active: boolean,
+  scale: number,
+): void {
+  const rect = chevronRect(node);
+  if (!rect) return;
+
+  const cx = rect.x + rect.width / 2;
+  const cy = rect.y + rect.height / 2;
+  const r = 3.2;
+
+  ctx.strokeStyle = active ? theme.primary : theme.mutedForeground;
+  ctx.globalAlpha = 0.75;
+  ctx.lineWidth = 1.6 / scale;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  if (node.isCollapsed) {
+    ctx.moveTo(cx - r * 0.6, cy - r);
+    ctx.lineTo(cx + r * 0.6, cy);
+    ctx.lineTo(cx - r * 0.6, cy + r);
+  } else {
+    ctx.moveTo(cx - r, cy - r * 0.6);
+    ctx.lineTo(cx, cy + r * 0.6);
+    ctx.lineTo(cx + r, cy - r * 0.6);
+  }
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+  ctx.globalAlpha = 1;
+}
+
 function drawNode(
   ctx: CanvasRenderingContext2D,
   theme: CanvasTheme,
@@ -292,6 +333,23 @@ function drawNode(
   ctx.textBaseline = 'middle';
   ctx.fillStyle = activation > 0.5 ? theme.primary : theme.foreground;
   ctx.fillText(node.headerText, node.x + NODE_PAD_X + GLYPH_OFFSET, textY);
+
+  if (node.hasChevron) drawChevron(ctx, theme, node, activation > 0.5, scale);
+
+  // What a collapsed container is hiding, right-aligned before the chevron.
+  if (node.badgeText) {
+    ctx.font = FONT_ROW_KEY;
+    ctx.textAlign = 'right';
+    ctx.fillStyle = theme.mutedForeground;
+    ctx.globalAlpha = 0.85;
+    ctx.fillText(
+      node.badgeText,
+      node.x + node.width - NODE_PAD_X - CHEVRON_WIDTH - BADGE_GAP,
+      textY,
+    );
+    ctx.globalAlpha = 1;
+    ctx.textAlign = 'left';
+  }
 
   if (scale < LOD_DETAIL || node.rows.length === 0) return;
 
@@ -529,13 +587,17 @@ function drawEdgeLabel(
   let x = label.x + EDGE_LABEL_PAD_X;
   const centreY = label.y + label.height / 2;
 
-  const category = getEventCategory(edge.data.eventType);
+  // A merged edge speaks for many transitions, so it names none of them: one
+  // event's glyph and guard would misdescribe the rest.
+  const merged = edge.mergedCount > 1;
+
+  const category = merged ? null : getEventCategory(edge.data.eventType);
   if (category) {
     drawEventIcon(ctx, theme, category, x, centreY);
     x += EDGE_ICON_WIDTH;
   }
 
-  const text = edgeLabelText(edge.data);
+  const text = merged ? mergedLabelText(edge.mergedCount) : edgeLabelText(edge.data);
   if (text) {
     ctx.font = FONT_LABEL;
     ctx.fillStyle = strong ? theme.primary : theme.foreground;
@@ -543,7 +605,7 @@ function drawEdgeLabel(
     x += ctx.measureText(text).width;
   }
 
-  if (edge.data.guard) {
+  if (!merged && edge.data.guard) {
     ctx.font = FONT_BODY;
     ctx.fillStyle = theme.primary;
     ctx.globalAlpha = strong ? 1 : 0.75;

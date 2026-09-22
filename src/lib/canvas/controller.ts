@@ -15,7 +15,13 @@ import {
   type CameraTween,
 } from './animation';
 import { followCamera, unionRect } from './follow';
-import { hitTestEdge, hitTestNode, type Scene, type SceneNode } from './scene';
+import {
+  hitTestChevron,
+  hitTestEdge,
+  hitTestNode,
+  type Scene,
+  type SceneNode,
+} from './scene';
 import { readCanvasTheme, type CanvasTheme } from './theme';
 
 export interface GraphControllerCallbacks {
@@ -23,6 +29,8 @@ export interface GraphControllerCallbacks {
   onSelect?: (node: SceneNode | null) => void;
   /** Fires when following turns itself off because the user took the camera. */
   onFollowChange?: (following: boolean) => void;
+  /** The expand/collapse chevron of a container was clicked. */
+  onToggleCollapse?: (nodeId: string) => void;
 }
 
 export interface GraphController {
@@ -222,6 +230,7 @@ export function createGraphController(
   function updateHover(screen: Point): void {
     if (!scene) return;
     const world = screenToWorld(camera, screen);
+    const overChevron = hitTestChevron(scene, world) !== null;
     const node = hitTestNode(scene, world);
     // An edge only wins when the pointer is not over a node box.
     const edge = node ? null : hitTestEdge(scene, world, EDGE_TOLERANCE / camera.scale);
@@ -231,7 +240,7 @@ export function createGraphController(
     if (nodeId === state.hoveredNodeId && edgeId === state.hoveredEdgeId) return;
 
     state = { ...state, hoveredNodeId: nodeId, hoveredEdgeId: edgeId };
-    canvas.style.cursor = node || edge ? 'pointer' : 'grab';
+    canvas.style.cursor = overChevron || node || edge ? 'pointer' : 'grab';
     callbacks.onHoverChange?.({ node, edge });
     markDirty();
   }
@@ -275,6 +284,15 @@ export function createGraphController(
 
     if (wasDrag || !scene) return;
     const world = screenToWorld(camera, pointerPosition(event));
+
+    // The chevron wins over selection: it sits inside the node it belongs to,
+    // so a plain node hit-test would always swallow it.
+    const toggled = hitTestChevron(scene, world);
+    if (toggled) {
+      callbacks.onToggleCollapse?.(toggled.id);
+      return;
+    }
+
     const node = hitTestNode(scene, world);
     state = { ...state, selectedNodeId: node?.id ?? null };
     callbacks.onSelect?.(node);

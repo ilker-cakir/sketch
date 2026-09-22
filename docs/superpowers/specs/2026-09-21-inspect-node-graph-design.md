@@ -364,6 +364,37 @@ Mermaid parser). Only the editor imports those, and live inspection receives a
 machine config over the wire, so they no longer reach the inspect and visualize
 bundles. Transfer dropped to 3.4 MB.
 
+## Collapsing containers
+
+Drawing a hundred states at once is a hairball no renderer can rescue, so the
+answer is to draw fewer of them. Collapsing happens on the graph, before
+layout, not at draw time: it has to shrink the problem ELK solves as well as
+the picture. Collapsing the outermost containers of the test machine takes
+layout from ~1.2 s to 137 ms.
+
+A collapsed container keeps its box and loses its insides. Transitions that
+crossed its boundary are re-pointed at the container, so a transition into a
+region still arrives somewhere; transitions with both ends inside it are
+dropped, and the container reports the number of states it holds instead.
+
+### Merging is not optional
+
+Re-pointing alone makes the picture worse, not better. Collapsing the three
+regions of the test machine left 171 transitions running between 3 boxes,
+which draws as a solid block of parallel lines — strictly less readable than
+the expanded graph it replaced. Transitions sharing a pair of endpoints are
+therefore merged into one edge labelled `N transitions`, and a merged edge
+shows no event glyph, guard or actions, since naming one of the transitions it
+stands for would misdescribe the rest.
+
+### Interaction
+
+The chevron in a container's header toggles it, and wins over selection in
+hit-testing because it sits inside the node it belongs to. The toolbar collapses
+or expands the outermost containers in one go, and the details panel carries the
+same toggle. Re-layout keeps the current scene on screen rather than blanking to
+a spinner, and a selection folded away by a collapse is cleared.
+
 ## Following the active state
 
 The camera can chase the machine, which is what makes the view a debugger

@@ -5,6 +5,7 @@ import { toElk, type ToElkOptions } from './to-elk';
 import { fromElk } from './from-elk';
 import type { LayoutGraph } from './types';
 import { hashGraph, readPersistedLayout, writePersistedLayout } from './cache';
+import { collapseGraph } from './collapse';
 import ElkApi from 'elkjs/lib/elk-api.js';
 // Emitted as a standalone asset; fetched only when the worker starts.
 import elkWorkerUrl from 'elkjs/lib/elk-worker.min.js?url';
@@ -72,6 +73,8 @@ const inflight = new Map<string, Promise<LayoutGraph>>();
 
 export interface LayoutOptions extends ToElkOptions {
   measureText?: MeasureText;
+  /** Containers to draw closed, with their insides left out of layout. */
+  collapsed?: ReadonlySet<string>;
 }
 
 let defaultMeasureText: MeasureText | null = null;
@@ -93,8 +96,10 @@ export function layoutMachine(
   graph: MachineGraph,
   options: LayoutOptions = {},
 ): Promise<LayoutGraph> {
-  const { measureText = getMeasureText(), ...elkOptions } = options;
-  const key = hashGraph(graph, JSON.stringify(elkOptions));
+  const { measureText = getMeasureText(), collapsed, ...elkOptions } = options;
+  // Collapsing changes the graph, so it has to be part of the cache identity.
+  const collapsedKey = collapsed && collapsed.size > 0 ? [...collapsed].sort().join(',') : '';
+  const key = hashGraph(graph, `${JSON.stringify(elkOptions)}|${collapsedKey}`);
 
   const cached = cache.get(key);
   if (cached) return Promise.resolve(cached);
@@ -106,13 +111,22 @@ export function layoutMachine(
     .then((persisted) => {
       if (persisted) return persisted;
 
-      const built = toElk(graph, measureText, elkOptions);
+      const folded = collapseGraph(graph, collapsed ?? new Set());
+      const built = toElk(folded.graph, measureText, {
+        ...elkOptions,
+        collapsed,
+        hiddenCountById: folded.hiddenCountById,
+        mergedCountById: folded.mergedCountById,
+      });
       return runElk(built.root)
         .then((result) =>
-          fromElk(result, graph, {
+          fromElk(result, folded.graph, {
             selfEdgeIds: built.selfEdgeIds,
             droppedEdgeCount: built.droppedEdgeCount,
             edgeOriginById: built.edgeOriginById,
+            collapsed,
+            hiddenCountById: folded.hiddenCountById,
+            mergedCountById: folded.mergedCountById,
           }),
         )
         .then((laidOut) => {

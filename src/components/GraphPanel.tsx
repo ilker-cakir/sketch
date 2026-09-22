@@ -1,6 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChevronDown,
+  ChevronRight,
   ChevronUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Crosshair,
   Loader2,
   LocateFixed,
@@ -18,6 +22,7 @@ import {
 import { getEventCategory, type MachineGraph } from '@/lib/machine';
 import type { LayoutEdge } from '@/lib/layout/types';
 import { layoutMachine } from '@/lib/layout/client';
+import { outermostCollapsibleIds } from '@/lib/layout/collapse';
 import { createCanvasMeasureText } from '@/lib/layout/measure';
 import { buildScene, relativeTarget, type Scene } from '@/lib/canvas/scene';
 import { GraphCanvas, type GraphCanvasHandle } from './GraphCanvas';
@@ -34,6 +39,8 @@ type LayoutStatus =
   | { phase: 'error'; message: string };
 
 const measureText = createCanvasMeasureText();
+/** Stable identity, so an "expand all" does not re-run layout needlessly. */
+const EMPTY: ReadonlySet<string> = new Set();
 
 /**
  * Wires a machine graph to the canvas renderer.
@@ -44,20 +51,32 @@ const measureText = createCanvasMeasureText();
 export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
   const [status, setStatus] = useState<LayoutStatus>({ phase: 'loading' });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(EMPTY);
   // On by default: the point of the live view is watching where the machine
   // goes. Any manual pan or zoom hands the camera back to the user.
   const [following, setFollowing] = useState(true);
   const canvasRef = useRef<GraphCanvasHandle>(null);
+  const laidOutGraph = useRef<MachineGraph | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    setStatus({ phase: 'loading' });
-    setSelectedId(null);
+    const isNewMachine = laidOutGraph.current !== graph;
+    if (isNewMachine) {
+      setSelectedId(null);
+      setCollapsed(EMPTY);
+    }
+    // Re-laying out after a collapse keeps the current picture on screen
+    // rather than blanking to a spinner for something the user just clicked.
+    setStatus((prev) => (prev.phase === 'ready' && !isNewMachine ? prev : { phase: 'loading' }));
 
-    layoutMachine(graph, { measureText })
+    layoutMachine(graph, { measureText, collapsed })
       .then((layout) => {
         if (cancelled) return;
-        setStatus({ phase: 'ready', scene: buildScene(layout, measureText) });
+        laidOutGraph.current = graph;
+        const scene = buildScene(layout, measureText);
+        setStatus({ phase: 'ready', scene });
+        // A state folded away by this layout cannot stay selected.
+        setSelectedId((id) => (id !== null && !scene.nodeById.has(id) ? null : id));
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -70,7 +89,7 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [graph]);
+  }, [graph, collapsed]);
 
   const scene = status.phase === 'ready' ? status.scene : null;
 
@@ -95,6 +114,13 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
     canvasRef.current?.centerOn(nodeId);
   }, []);
   const close = useCallback(() => setSelectedId(null), []);
+  const toggleCollapse = useCallback((nodeId: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(nodeId)) next.add(nodeId);
+      return next;
+    });
+  }, []);
   const select = useCallback(
     (node: { id: string } | null) => setSelectedId(node?.id ?? null),
     [],
@@ -126,6 +152,7 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
   }
 
   const readyScene = status.scene;
+  const hiddenTotal = readyScene.nodes.reduce((sum, n) => sum + n.hiddenCount, 0);
 
   return (
     <div className="relative size-full">
@@ -136,6 +163,7 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
         selectedNodeId={selectedId}
         follow={following}
         onFollowChange={setFollowing}
+        onToggleCollapse={toggleCollapse}
         onSelect={select}
       />
 
@@ -158,8 +186,29 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
           <ToolbarButton label="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.25)}>
             <Plus className="size-4" />
           </ToolbarButton>
-          <span className="border-l border-border px-2 text-[0.6875rem] text-muted-foreground">
+          <span className="mx-0.5 h-5 w-px bg-border" />
+          <ToolbarButton
+            label="Collapse all"
+            testId="graph-collapse-all"
+            onClick={() => setCollapsed(new Set(outermostCollapsibleIds(graph)))}
+          >
+            <ChevronsDownUp className="size-4" />
+          </ToolbarButton>
+          <ToolbarButton
+            label="Expand all"
+            testId="graph-expand-all"
+            onClick={() => setCollapsed(EMPTY)}
+          >
+            <ChevronsUpDown className="size-4" />
+          </ToolbarButton>
+          <span
+            data-testid="graph-counts"
+            className="border-l border-border px-2 text-[0.6875rem] text-muted-foreground"
+          >
             {readyScene.nodes.length} states · {readyScene.edges.length} transitions
+            {/* Named, because sitting beside the transition count it would
+                otherwise read as hidden transitions. */}
+            {hiddenTotal > 0 && ` · ${hiddenTotal} states hidden`}
           </span>
         </div>
 
@@ -182,6 +231,7 @@ export function GraphPanel({ graph, activeIds }: GraphPanelProps) {
           isActive={activeIds.has(selectedId)}
           activeChildKey={activeChildKey}
           onReveal={reveal}
+          onToggleCollapse={toggleCollapse}
           onClose={close}
         />
       )}
@@ -196,6 +246,7 @@ interface SelectionDetailsProps {
   /** Active child ids, joined; see `activeChildKey` above. */
   activeChildKey: string;
   onReveal: (nodeId: string) => void;
+  onToggleCollapse: (nodeId: string) => void;
   onClose: () => void;
 }
 
@@ -212,6 +263,7 @@ const SelectionDetails = memo(function SelectionDetails({
   isActive,
   activeChildKey,
   onReveal,
+  onToggleCollapse,
   onClose,
 }: SelectionDetailsProps) {
   const node = scene.nodeById.get(nodeId);
@@ -287,10 +339,35 @@ const SelectionDetails = memo(function SelectionDetails({
           </p>
         )}
 
-        <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-          <span>{node.data.type ?? 'atomic'}</span>
-          {node.isInitial && <span className="text-primary">· initial</span>}
-          {node.data.historyType && <span>· {node.data.historyType}</span>}
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <div className="flex flex-wrap gap-1 text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+            <span>{node.data.type ?? 'atomic'}</span>
+            {node.isInitial && <span className="text-primary">· initial</span>}
+            {node.data.historyType && <span>· {node.data.historyType}</span>}
+          </div>
+          {node.hasChevron && (
+            <button
+              type="button"
+              data-testid="graph-selection-collapse"
+              onClick={() => onToggleCollapse(node.id)}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[0.625rem]',
+                'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {node.isCollapsed ? (
+                <>
+                  <ChevronRight className="size-3" />
+                  Expand {node.hiddenCount}
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="size-3" />
+                  Collapse
+                </>
+              )}
+            </button>
+          )}
         </div>
 
         <Section label="Sub-states" count={childIds.length}>
@@ -423,6 +500,9 @@ function TransitionRow({
   const { data } = edge;
   const isOut = direction === 'out';
   const otherId = isOut ? edge.targetId : edge.sourceId;
+  // A merged edge speaks for several transitions at once, so naming one of
+  // them here would misdescribe the rest.
+  const merged = edge.mergedCount > 1;
   const category = getEventCategory(data.eventType);
   // A targetless transition has no far end to name; everything else is named
   // relative to the state whose details these are.
@@ -433,7 +513,7 @@ function TransitionRow({
 
   return (
     <RowButton testId={`graph-transition-${direction}`} onClick={() => onReveal(otherId)}>
-      {(data.guard || data.guardPrefix) && (
+      {!merged && (data.guard || data.guardPrefix) && (
         <span className="mb-0.5 flex items-center gap-1 text-[0.6875rem]">
           {data.guardPrefix && (
             <span className="font-semibold italic text-muted-foreground">
@@ -450,11 +530,19 @@ function TransitionRow({
         in. Naming the far end first would leave it looking like the event.
       */}
       <span className="flex items-center gap-1.5">
-        {category && EVENT_ICONS[category]}
-        {data.displayEvent && (
-          <span className="truncate font-mono text-xs font-semibold text-foreground">
-            {data.displayEvent}
+        {merged ? (
+          <span className="truncate text-xs font-semibold text-foreground">
+            {edge.mergedCount} transitions
           </span>
+        ) : (
+          <>
+            {category && EVENT_ICONS[category]}
+            {data.displayEvent && (
+              <span className="truncate font-mono text-xs font-semibold text-foreground">
+                {data.displayEvent}
+              </span>
+            )}
+          </>
         )}
         {otherLabel && (
           <>
@@ -466,7 +554,7 @@ function TransitionRow({
         )}
       </span>
 
-      {data.actions.length > 0 && (
+      {!merged && data.actions.length > 0 && (
         <span className="mt-1 flex flex-wrap gap-1">
           {data.actions.map((action, i) => (
             <span
