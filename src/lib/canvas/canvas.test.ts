@@ -15,9 +15,10 @@ import {
   zoomBy,
   type Camera,
 } from './camera';
-import { buildScene, hitTestEdge, hitTestNode } from './scene';
+import { buildScene, hitTestEdge, hitTestNode, relativeTarget } from './scene';
 import { EDGE_ICON_WIDTH, measureEdgeLabel } from '@/lib/layout/measure';
 import type { LayoutEdge } from '@/lib/layout/types';
+import { getRelativeTarget, type MachineGraph } from '@/lib/machine';
 
 const fakeMeasure: MeasureText = (text, font) => {
   const size = Number(font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 12);
@@ -438,5 +439,153 @@ describe('self and targetless transitions', () => {
       fakeMeasure,
     );
     expect(scene.selfLoopLabels.size).toBe(0);
+  });
+});
+
+describe('details-panel indexes', () => {
+  const leaf: Omit<LayoutNode['data'], 'key'> = {
+    type: 'atomic',
+    entry: [],
+    exit: [],
+    invocations: [],
+    initialId: null,
+  };
+
+  const scene = buildScene(
+    {
+      width: 100,
+      height: 100,
+      droppedEdgeCount: 0,
+      nodes: [
+        node('m', { x: 0, y: 0, width: 80, height: 80 }, { isContainer: true }),
+        node('m.a', { x: 5, y: 5, width: 20, height: 20 }, {
+          parentId: 'm',
+          depth: 1,
+          isInitial: true,
+          data: { ...leaf, key: 'a' },
+        }),
+        node('m.b', { x: 30, y: 5, width: 20, height: 20 }, {
+          parentId: 'm',
+          depth: 1,
+          data: { ...leaf, key: 'b' },
+        }),
+        node('m.b.deep', { x: 32, y: 8, width: 10, height: 10 }, {
+          parentId: 'm.b',
+          depth: 2,
+          data: { ...leaf, key: 'deep' },
+        }),
+      ],
+      edges: [
+        edge('e1', 'm.a', 'm.b'),
+        edge('e2', 'm.b', 'm.a'),
+        edge('e3', 'm.a', 'm.a'),
+      ],
+    },
+    fakeMeasure,
+  );
+
+  it('indexes children by parent, in layout order', () => {
+    expect(scene.childIds.get('m')).toEqual(['m.a', 'm.b']);
+    expect(scene.childIds.get('m.b')).toEqual(['m.b.deep']);
+    expect(scene.childIds.get('m.a')).toBeUndefined();
+  });
+
+  it('indexes incoming edges by target', () => {
+    expect(scene.inEdgeIds.get('m.b')).toEqual(['e1']);
+    expect(scene.inEdgeIds.get('m.a')).toEqual(['e2']);
+  });
+
+  it('leaves a self transition out of the incoming index', () => {
+    // It is already listed as outgoing; listing it twice would say the same
+    // thing in both directions.
+    expect(scene.inEdgeIds.get('m.a')).not.toContain('e3');
+    expect(scene.outEdgeIds.get('m.a')).toContain('e3');
+  });
+
+  describe('relativeTarget', () => {
+    it('names a self transition', () => {
+      expect(relativeTarget(scene, 'm.a', 'm.a')).toBe('(self)');
+    });
+
+    it('names a sibling by its key alone', () => {
+      expect(relativeTarget(scene, 'm.a', 'm.b')).toBe('b');
+    });
+
+    it('names a descendant of a sibling by its path from that sibling', () => {
+      expect(relativeTarget(scene, 'm.a', 'm.b.deep')).toBe('b.deep');
+    });
+
+    it('marks a descendant with a leading dot when the source has no siblings', () => {
+      expect(relativeTarget(scene, 'm', 'm.a')).toBe('.a');
+    });
+
+    it('names its own descendant through itself, as the DOM renderer does', () => {
+      // A node counts as one of its own siblings, so this reads as a path from
+      // the sibling rather than the leading-dot form. Matching `TransitionViz`
+      // matters more than the prettier name: the same transition must not be
+      // called two different things in the two views.
+      expect(relativeTarget(scene, 'm.b', 'm.b.deep')).toBe('b.deep');
+    });
+
+    it('falls back to an absolute id when there is no relative path', () => {
+      expect(relativeTarget(scene, 'm.b.deep', 'm')).toBe('#m');
+    });
+
+    it('returns the raw id for a node the scene does not have', () => {
+      expect(relativeTarget(scene, 'm.a', 'nowhere')).toBe('nowhere');
+    });
+  });
+});
+
+describe('relativeTarget parity with the DOM renderer', () => {
+  // The canvas resolves target names through the scene's maps and the DOM
+  // renderer scans the graph. They must agree, or the same transition is
+  // called two different things depending on which view you are in.
+  const nodes = [
+    { id: 'm', parentId: null, key: 'm' },
+    { id: 'm.a', parentId: 'm', key: 'a' },
+    { id: 'm.b', parentId: 'm', key: 'b' },
+    { id: 'm.b.deep', parentId: 'm.b', key: 'deep' },
+    { id: 'm.b.deep.deeper', parentId: 'm.b.deep', key: 'deeper' },
+  ];
+
+  const scene = buildScene(
+    {
+      width: 100,
+      height: 100,
+      droppedEdgeCount: 0,
+      nodes: nodes.map((n, i) =>
+        node(n.id, { x: i * 10, y: 0, width: 10, height: 10 }, {
+          parentId: n.parentId,
+          data: {
+            key: n.key,
+            type: 'atomic',
+            entry: [],
+            exit: [],
+            invocations: [],
+            initialId: null,
+          },
+        }),
+      ),
+      edges: [],
+    },
+    fakeMeasure,
+  );
+
+  const graph = {
+    nodes: nodes.map((n) => ({
+      id: n.id,
+      parentId: n.parentId,
+      data: { key: n.key },
+    })),
+  } as unknown as MachineGraph;
+
+  const ids = nodes.map((n) => n.id);
+  const pairs = ids.flatMap((source) => ids.map((target) => [source, target]));
+
+  it.each(pairs)('agrees for %s → %s', (source, target) => {
+    expect(relativeTarget(scene, source, target)).toBe(
+      getRelativeTarget(source, target, graph),
+    );
   });
 });

@@ -263,6 +263,35 @@ input alone.
 With viewport culling on a 3961×9111 world, a typical frame draws a few dozen
 nodes rather than 99.
 
+### Selection details
+
+Clicking a state opens a panel naming what the canvas cannot always show at the
+current zoom: the state's sub-states, the transitions leading out of it and the
+transitions leading into it.
+
+| Row | Reads | Clicking it |
+| --- | --- | --- |
+| Parent | `^ parent-key` | Selects the parent |
+| Sub-state | `key` + initial/active marks, type, sub-state count | Selects the child |
+| Outgoing | `EVENT -> target` | Selects the target |
+| Incoming | `EVENT <- source` | Selects the source |
+
+The event leads both transition lists so they read down a common column; putting
+the far end first leaves it looking like the event name. Target names come from
+`relativeTarget`, which resolves through the scene's maps rather than scanning
+the node list, and is tested for agreement with the DOM renderer's
+`getRelativeTarget` across every source/target pair of a fixture — the same
+transition must not be called two different things in the two views.
+
+Selecting from the panel also reveals the state on the canvas: `centerOn` tweens
+to it and raises the zoom to at least the detail threshold, since centring a
+node too small to read is not an answer.
+
+The panel lists rows, so it must not re-render at snapshot rate. It is memoised
+on plain comparable props, with the one snapshot-dependent input — which
+children are active — collapsed into a joined string, so a snapshot that does
+not change this state's highlighting does not touch its rows.
+
 ## Error handling
 
 | Condition | Behaviour |
@@ -331,6 +360,9 @@ unchanged. The canvas gets its own `data-testid="graph-canvas"`.
 - WebGL rendering.
 - Persisting camera position across reloads.
 - Virtualizing the Events and Sequence sidebar lists.
+- Sending events from the graph. The details panel names transitions; it does
+  not fire them, because `/visualize` observes a live actor rather than driving
+  a simulation.
 
 ## Constraint
 

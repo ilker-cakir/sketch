@@ -37,6 +37,10 @@ export interface Scene {
   cellSize: number;
   /** Outgoing edge ids per node, for emphasising a hovered node's transitions. */
   outEdgeIds: Map<string, string[]>;
+  /** Incoming edge ids per node, so the details panel can list what leads here. */
+  inEdgeIds: Map<string, string[]>;
+  /** Child node ids per node, in layout order. */
+  childIds: Map<string, string[]>;
   /**
    * Node id → the events of its self and targetless transitions, as one label.
    *
@@ -121,6 +125,24 @@ export function buildScene(
     [...outEdges].map(([id, edges]) => [id, edges.map((e) => e.id)]),
   );
 
+  const inEdgeIds = new Map<string, string[]>();
+  for (const edge of layout.edges) {
+    // A self transition is already listed as outgoing; listing it again as
+    // incoming would say the same thing twice.
+    if (edge.isSelf) continue;
+    const bucket = inEdgeIds.get(edge.targetId);
+    if (bucket) bucket.push(edge.id);
+    else inEdgeIds.set(edge.targetId, [edge.id]);
+  }
+
+  const childIds = new Map<string, string[]>();
+  for (const node of layout.nodes) {
+    if (node.parentId === null) continue;
+    const bucket = childIds.get(node.parentId);
+    if (bucket) bucket.push(node.id);
+    else childIds.set(node.parentId, [node.id]);
+  }
+
   const isChoiceNode = (node: LayoutNode): boolean => {
     if (node.isContainer) return false;
     if (node.data.type !== 'atomic' && node.data.type !== null) return false;
@@ -188,9 +210,48 @@ export function buildScene(
     edgeGrid,
     cellSize: CELL_SIZE,
     outEdgeIds,
+    inEdgeIds,
+    childIds,
     selfLoopLabels,
     edgeDelayMs,
   };
+}
+
+/**
+ * How a transition target reads when written relative to its source.
+ *
+ * Mirrors `getRelativeTarget`, which the DOM renderer uses, so the same
+ * transition is named the same way in both views. Resolved through the
+ * scene's maps rather than scanning the node list, because the details panel
+ * names every transition of a state at once.
+ */
+export function relativeTarget(
+  scene: Scene,
+  sourceId: string,
+  targetId: string,
+): string {
+  if (sourceId === targetId) return '(self)';
+
+  const source = scene.nodeById.get(sourceId);
+  const target = scene.nodeById.get(targetId);
+  if (!source || !target) return targetId;
+
+  if (source.parentId === target.parentId) return target.data.key;
+
+  if (source.parentId) {
+    for (const siblingId of scene.childIds.get(source.parentId) ?? []) {
+      if (!targetId.startsWith(siblingId + '.')) continue;
+      const sibling = scene.nodeById.get(siblingId);
+      if (!sibling) continue;
+      return targetId.slice(siblingId.length - sibling.data.key.length);
+    }
+  }
+
+  if (targetId.startsWith(sourceId + '.')) {
+    return '.' + targetId.slice(sourceId.length + 1);
+  }
+
+  return '#' + targetId;
 }
 
 /** Deepest node containing `p`, or null. */

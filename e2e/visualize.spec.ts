@@ -92,7 +92,10 @@ async function probeCanvas(page: Page): Promise<CanvasProbe> {
 
     const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const [br, bg, bb] = [data[0], data[1], data[2]];
-    const stride = 4 * 40; // sample every 40th pixel — enough signal, far less work
+    // Every 4th pixel. Sparser sampling misses small moving details — an
+    // `after` timer bar advances only a few pixels a second — and turns this
+    // probe into a coin toss.
+    const stride = 4 * 4;
     let differing = 0;
     let signature = 0;
     let sampled = 0;
@@ -111,6 +114,34 @@ async function waitForPaint(page: Page): Promise<CanvasProbe> {
     .poll(async () => (await probeCanvas(page)).painted, { timeout: 10_000 })
     .toBeGreaterThan(0.01);
   return probeCanvas(page);
+}
+
+/**
+ * Selects a state by walking the details panel down from the machine root.
+ *
+ * Clicking the canvas needs to know where a node ended up; walking the panel
+ * does not, so this stays correct when the layout changes. Revealing a state
+ * also centres it and zooms to at least detail level, which is what makes
+ * anything drawn only at that zoom — an `after` timer bar — reliably visible.
+ */
+async function selectPath(page: Page, keys: string[]): Promise<void> {
+  const canvas = page.getByTestId('graph-canvas');
+  const box = (await canvas.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByTestId('graph-selection')).toBeVisible();
+
+  const parentLink = page.getByTestId('graph-selection-parent');
+  for (let i = 0; i < 6 && (await parentLink.count()) > 0; i++) {
+    await parentLink.click();
+  }
+
+  for (const key of keys) {
+    await page
+      .getByTestId('graph-substate')
+      .filter({ hasText: key })
+      .first()
+      .click();
+  }
 }
 
 test.describe('/visualize', () => {
@@ -147,12 +178,14 @@ test.describe('/visualize', () => {
   test('animates an after-timer with no further snapshots', async ({ page }) => {
     await waitForPaint(page);
 
-    // Timer bars only draw at detail zoom, so get above that threshold first
-    // and let the zoom tween settle.
-    for (let i = 0; i < 3; i++) {
-      await page.getByRole('button', { name: 'Zoom in' }).click();
-    }
-    await page.waitForTimeout(900);
+    // Timer bars only draw at detail zoom and only where they are on screen.
+    // Revealing the state guarantees both, so this no longer depends on where
+    // the layout happened to put it.
+    await selectPath(page, ['payment', 'processing']);
+    await expect(page.getByTestId('graph-selection-id')).toHaveText(
+      'checkout.payment.processing',
+    );
+    await page.waitForTimeout(400);
 
     // Entering `processing` starts its 4000ms timer.
     await sendSnapshot(page, { payment: 'processing' });
@@ -184,6 +217,62 @@ test.describe('/visualize', () => {
 
     await expect(page.getByTestId('graph-selection')).toBeVisible();
     await expect(page.getByTestId('graph-selection')).toContainText('checkout');
+  });
+
+  test('details a selected state: sub-states, and what leads in and out', async ({
+    page,
+  }) => {
+    const canvas = page.getByTestId('graph-canvas');
+    await waitForPaint(page);
+
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.getByTestId('graph-selection')).toBeVisible();
+
+    // Walk up to the root, whichever node the click landed on. This also
+    // exercises the parent link, which is the only way back up the tree.
+    const parentLink = page.getByTestId('graph-selection-parent');
+    for (let i = 0; i < 5 && (await parentLink.count()) > 0; i++) {
+      await parentLink.click();
+    }
+    await expect(page.getByTestId('graph-selection-id')).toHaveText('checkout');
+    await expect(parentLink).toHaveCount(0);
+
+    // The root's children, in machine order.
+    const substates = page.getByTestId('graph-substate');
+    await expect(substates).toHaveCount(3);
+    await expect(substates.nth(0)).toContainText('cart');
+    await expect(substates.nth(1)).toContainText('payment');
+    await expect(substates.nth(2)).toContainText('done');
+
+    // Descending selects the child and reframes the canvas on it.
+    await substates.nth(0).click();
+    await expect(page.getByTestId('graph-selection-id')).toHaveText('checkout.cart');
+    await expect(page.getByTestId('graph-selection')).toContainText(
+      'Items awaiting checkout',
+    );
+
+    // cart --CHECKOUT--> payment, and payment --CANCEL--> cart comes back.
+    const out = page.getByTestId('graph-transition-out');
+    await expect(out.filter({ hasText: 'CHECKOUT' })).toHaveText('CHECKOUT\u2192payment');
+    const incoming = page.getByTestId('graph-transition-in');
+    await expect(incoming.filter({ hasText: 'CANCEL' })).toHaveText('CANCEL\u2190payment');
+
+    // Following an incoming transition jumps to the state it comes from.
+    await incoming.filter({ hasText: 'CANCEL' }).click();
+    await expect(page.getByTestId('graph-selection-id')).toHaveText('checkout.payment');
+  });
+
+  test('closes the details panel', async ({ page }) => {
+    const canvas = page.getByTestId('graph-canvas');
+    await waitForPaint(page);
+
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect(page.getByTestId('graph-selection')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Close details' }).click();
+    await expect(page.getByTestId('graph-selection')).toHaveCount(0);
   });
 
   test('exposes zoom and fit controls', async ({ page }) => {

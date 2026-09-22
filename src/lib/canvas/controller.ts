@@ -313,12 +313,14 @@ export function createGraphController(
     centerOn(nodeId) {
       const node = scene?.nodeById.get(nodeId);
       if (!node) return;
-      camera = {
-        ...camera,
-        x: node.x + node.width / 2 - width / 2 / camera.scale,
-        y: node.y + node.height / 2 - height / 2 / camera.scale,
-      };
-      markDirty();
+      // Jumping to a node from a fit-out view would centre something too small
+      // to read, so zoom in far enough for its detail to be drawn.
+      const scale = Math.max(camera.scale, LOD_DETAIL);
+      startTween({
+        scale,
+        x: node.x + node.width / 2 - width / 2 / scale,
+        y: node.y + node.height / 2 - height / 2 / scale,
+      });
     },
     destroy() {
       destroyed = true;
